@@ -1,0 +1,538 @@
+################################################################################
+# Helper functions to perform analyses                                       ##
+# Authors: Malou Magnani, Antoine Creon                                      ##
+################################################################################
+
+################################################################################
+# KFRE-predicted risk      #####################################################
+################################################################################
+
+## Compute the linear predictor (PI) -------------------------------------------
+## It is the same for all time horizons
+PI_KFRE <- function(age, male, egfr, alb) {
+  PI <- -0.2201 *
+    (age / 10 - 7.036) +
+    0.2467 * (male - 0.5642) -
+    0.5567 * (egfr / 5 - 7.222) +
+    0.4510 * (log(alb) - 5.137)
+
+  return(PI)
+}
+
+## Compute 2y KFRE risk (P) ----------------------------------------------------
+KFRE_risk_2y <- function(PI) {
+  risk_2y <- 1 - (0.9832**exp(PI)) # re-calibrated for Non-North America
+
+  return(risk_2y)
+}
+
+# Compute 5y KFRE risk (P) -----------------------------------------------------
+KFRE_risk_5y <- function(PI) {
+  risk_5y <- 1 - (0.9365**exp(PI)) # re-calibrated for non-north america
+
+  return(risk_5y)
+}
+
+################################################################################
+# C-statistic              #####################################################
+################################################################################
+
+# Point estimate ---------------------------------------------------------------
+c_statistic_estimate <- function(
+  data, # cohort data
+  equation, # eGFR equation
+  horizon # time horizon
+) {
+  formula <- formula(glue::glue(
+    "survival::Surv(time_to_event_{horizon}y_modified, outcome_{horizon}y_modified) ~ I(- PI_{equation})"
+  ))
+  # Calculate C-statistic
+  discr <- Hmisc::rcorrcens(
+    formula = formula,
+    data = data
+  )
+
+  c_stat <- discr[1, 1]
+
+  return(c_stat)
+}
+
+# Bootstrapped confidence interval ---------------------------------------------
+
+c_statistic_CI <- function(
+  data, # cohort data
+  equation,
+  horizon, # time horizon
+  B = 500, # nb of boostraps
+  seed = 123
+) {
+  boot_func <- function(data, indices, equation) {
+    # Create resampled dataset
+    resampled_data <- data[indices, ]
+    # Apply the risk variable to resampled data
+    resampled_risk <- resampled_data |> dplyr::pull(glue::glue("PI_{equation}"))
+    # Calculate C-statistic on resampled data
+    boot_discr <- Hmisc::rcorrcens(
+      formula = formula(paste0(
+        "survival::Surv(resampled_data$time_to_event_",
+        horizon,
+        "y_modified, resampled_data$outcome_",
+        horizon,
+        "y_modified) ~ I(-resampled_risk)"
+      ))
+    )
+    boot_c_stat <- boot_discr[1, 1]
+    return(as.numeric(boot_c_stat))
+  }
+
+  # Set seed for reproducibility
+  set.seed(seed)
+
+  # Run bootstrap
+  boot_results <- boot::boot(
+    data = data,
+    statistic = boot_func,
+    R = B,
+    equation = equation,
+    parallel = "snow",
+    ncpus = ncpus,
+    cl = cl
+  )
+  # Calculate bootstrap confidence intervals
+  c_stat_ci <- boot::boot.ci(boot_results, type = "perc")
+  # Add only the CI to the results
+  C_Statistic_CI <- c(
+    c_stat_lower = c_stat_ci$percent[4],
+    c_stat_upper = c_stat_ci$percent[5]
+  )
+
+  return(C_Statistic_CI)
+}
+
+
+################################################################################
+# Calibration intercept and slope ##############################################
+################################################################################
+
+## Compute calibration intercept & slope with 95% CIs
+cal_int_slope <- function(data, equation, horizon) {
+  # extract outcome variables according to horizon
+  pred_risks <- eval(parse(
+    text = paste0("cohort$risk_", horizon, "y_", equation)
+  ))
+  data$time_to_event <- eval(parse(
+    text = paste0("data$time_to_event_", horizon, "y")
+  ))
+  data$outcome <- eval(parse(text = paste0("data$outcome_", horizon, "y")))
+
+  Score <- riskRegression::Score(
+    # Give score list of predictions for all individuals
+    # (This will be used for the predicted part of validation)
+    list(pred_risks),
+    # Define the model as subdistributional hazards model
+    formula = Hist(time_to_event, outcome) ~ 1,
+    # specify pseudovalues to be used
+    cens.method = "pseudo",
+    # define validation dataset with values for covariates,
+    # this is to be used for observed probabilities
+    data = data,
+    # define prediction horizon
+    times = horizon * 365.25,
+    # define event of interest
+    outcome = 1,
+    conf.int = TRUE,
+    # define validation methods
+    plots = "calibration",
+    summary = c("ipa"),
+    metrics = "brier"
+  )
+
+  cal_quant <- riskRegression::plotCalibration(
+    Score,
+    # use CIF in presence of competing risks
+    cens.method = "pseudo",
+    # divide risk in quantiles
+    method = "quantile",
+    # 10 quantiles
+    q = 10,
+    # do not plot
+    plot = FALSE
+  )
+
+  # Extract these 10 datapoints
+  cal_curve <- cbind(
+    cal_quant$plotFrames$`1`$Pred,
+    cal_quant$plotFrames$`1`$Obs
+  ) |>
+    as.data.frame() |>
+    # Rename the variables
+    dplyr::rename("Pred" = "V1", "Obs" = "V2")
+
+  cal_model <- stats::lm(Obs ~ Pred, data = cal_curve)
+
+  CI <- round(confint(cal_model), 5)
+
+  return(tibble(
+    cal_int = cal_model$coefficients[1],
+    cal_int_lower = CI[1, 1],
+    cal_int_upper = CI[1, 2],
+    cal_slope = cal_model$coefficients[2],
+    cal_slope_lower = CI[2, 1],
+    cal_slope_upper = CI[2, 2]
+  ))
+}
+
+## Calibration plots -----------------------------------------------------------
+
+calibration_plot <- function(data, equation, horizon) {
+  equation_parsed <- eval(parse(
+    text = paste0("cohort$risk_", horizon, "y_", equation)
+  ))
+
+  data$time_to_event <- eval(parse(
+    text = paste0("cohort$time_to_event_", horizon, "y")
+  ))
+
+  data$outcome <- eval(parse(text = paste0("cohort$outcome_", horizon, "y")))
+
+  Score <- riskRegression::Score(
+    object = list(equation = equation_parsed),
+    formula = Hist(time_to_event, outcome) ~ 1,
+    cens.method = "pseudo",
+    data = data,
+    times = horizon * 365.25,
+    outcome = 1,
+    conf.int = TRUE,
+    plots = "calibration"
+  )
+
+  # Extract and smooth pseudo-values
+  pseudos <- data.frame(Score$Calibration$plotframe) |>
+    dplyr::arrange(risk)
+
+  # add CI
+  smooth_pseudos <- predict(
+    stats::loess(pseudovalue ~ risk, data = pseudos, degree = 1, span = 0.33)
+  )
+
+  # Store in a data frame
+  temp_df <- data.frame(
+    risk = pseudos$risk,
+    observed = smooth_pseudos,
+    model = equation
+  ) %>%
+    mutate(horizon = horizon)
+
+  temp_df
+}
+
+################################################################################
+# Observed/estimated ratio #####################################################
+################################################################################
+
+## Compute O/E ratio with CIs using bootstrapping ------------------------------
+oe_ratio <- function(
+  equation,
+  horizon,
+  bootstrap = FALSE,
+  B = 500,
+  seed = 123
+) {
+  # Define variables
+  pred_risks <- eval(parse(
+    text = paste0("cohort$risk_", horizon, "y_", equation)
+  ))
+
+  CIF <- eval(parse(text = paste0("cin_", horizon, "y")))
+
+  # Calculate original O/E ratio
+  expected <- mean(pred_risks)
+  observed <- cmprsk::timepoints(CIF, horizon * 365.25)
+  oe <- observed$est[1] / expected
+
+  # Initialize results with just the O/E ratio
+  results <- tibble(
+    O_E_Ratio = oe
+  )
+
+  # Add bootstrapping if requested
+  if (bootstrap) {
+    # Define bootstrap function
+    boot_func <- function(data, indices, pred_risks, cif_obj, time_horizon) {
+      # Resample risk predictions
+      resampled_risks <- pred_risks[indices]
+
+      # Calculate expected risk in bootstrap sample
+      boot_expected <- mean(resampled_risks)
+
+      # For observed, we need to recalculate CIF with resampled data
+      # This depends on how your CIF object is created
+      # This is a placeholder - you'll need to adjust based on your data structure
+      boot_observed <- cmprsk::timepoints(cif_obj, time_horizon)
+
+      # Calculate O/E ratio
+      boot_oe <- boot_observed$est[1] / boot_expected
+
+      return(as.numeric(boot_oe))
+    }
+
+    # Set seed for reproducibility
+    set.seed(seed)
+
+    # Create a dummy dataset for bootstrapping
+    # We need this because boot() requires a data argument
+    dummy_data <- data.frame(id = 1:length(pred_risks))
+
+    # Run bootstrap
+    boot_results <- boot::boot(
+      data = dummy_data,
+      statistic = boot_func,
+      R = B,
+      pred_risks = pred_risks,
+      cif_obj = CIF,
+      time_horizon = horizon * 365.25
+    )
+
+    # Calculate bootstrap confidence intervals
+    oe_ci <- boot::boot.ci(boot_results, type = "perc")
+
+    # Add only the CI to the results
+    results$O_E_lower <- if (!is.null(oe_ci)) {
+      oe_ci$percent[4]
+    } else {
+      NULL
+    }
+
+    results$O_E_upper <- if (!is.null(oe_ci)) {
+      oe_ci$percent[5]
+    } else {
+      NULL
+    }
+  }
+
+  return(results)
+}
+
+################################################################################
+# Scaled Brier & Brier score, with CIs using bootstrapping #####################
+################################################################################
+
+## Compute Scaled Brier & Brier score, with CIs using bootstrapping
+brier_scores <- function(
+  data,
+  equation,
+  horizon,
+  bootstrap = FALSE,
+  B = 500,
+  seed = 123
+) {
+  # extract outcome variables according to horizon
+  pred_risks <- eval(parse(
+    text = paste0("cohort$risk_", horizon, "y_", equation)
+  ))
+
+  data$time_to_event <- eval(parse(
+    text = paste0("cohort$time_to_event_", horizon, "y")
+  ))
+  data$outcome <- eval(parse(text = paste0("cohort$outcome_", horizon, "y")))
+
+  # Original Brier score calculation
+  brier <- riskRegression::Score(
+    list(pred_risks),
+    formula = Hist(time_to_event, outcome) ~ 1,
+    cens.method = "pseudo",
+    data = data,
+    times = horizon * 365.25,
+    cause = 1,
+    conf.int = TRUE,
+    metrics = "brier",
+    summary = "ipa"
+  )
+
+  # Extract values for the numeric model only
+  numeric_model <- brier$Brier$score[model == "numeric"]
+
+  # Store original values
+  brier_score <- numeric_model$Brier
+  ipa_score <- numeric_model$IPA
+
+  # Initialize results with just the scores
+  results <- tibble(
+    Brier_Score = brier_score,
+    Scaled_Brier_Score = ipa_score
+  )
+
+  # Add bootstrapping if requested
+  if (bootstrap) {
+    # Define bootstrap function
+    boot_func <- function(data, indices, risk_var) {
+      resampled_data <- data[indices, ]
+      resampled_risk <- risk_var[indices]
+
+      boot_brier <- riskRegression::Score(
+        list(resampled_risk),
+        formula = Hist(time_to_event, outcome) ~ 1,
+        cens.method = "pseudo",
+        data = resampled_data,
+        conf.int = TRUE,
+        times = horizon * 365.25,
+        outcome = 1,
+        metrics = "brier",
+        summary = "ipa"
+      )
+
+      ipa_value <- boot_brier$Brier$score$IPA[
+        boot_brier$Brier$score$model == "numeric"
+      ]
+      brier_value <- boot_brier$Brier$score$Brier[
+        boot_brier$Brier$score$model == "numeric"
+      ]
+
+      return(c(brier = as.numeric(brier_value), ipa = as.numeric(ipa_value)))
+    }
+
+    # Set seed for reproducibility
+    set.seed(seed)
+
+    # Run bootstrap
+    boot_results <- boot::boot(
+      data = data,
+      statistic = boot_func,
+      R = B,
+      risk_var = pred_risks
+    )
+
+    # Calculate bootstrap confidence intervals
+    brier_ci <- boot::boot.ci(boot_results, type = "perc", index = 1)
+    ipa_ci <- boot::boot.ci(boot_results, type = "perc", index = 2)
+
+    # Add only the CIs to the results
+    results$Brier_lower <- if (!is.null(brier_ci)) {
+      brier_ci$percent[4]
+    } else {
+      NULL
+    }
+
+    results$Brier_upper <- if (!is.null(brier_ci)) {
+      brier_ci$percent[5]
+    } else {
+      NULL
+    }
+
+    results$Scaled_Brier_lower <- if (!is.null(ipa_ci)) {
+      ipa_ci$percent[4]
+    } else {
+      NULL
+    }
+
+    results$Scaled_Brier_upper <- if (!is.null(ipa_ci)) {
+      ipa_ci$percent[5]
+    } else {
+      NULL
+    }
+  }
+
+  return(results)
+}
+
+# Delta Brier ------------------------------------------------------------------
+
+delta_brier <- function(
+  data,
+  equation_list,
+  contrast_list,
+  horizon
+) {
+  # extract outcome variables according to horizon
+
+  parse_objects <- map(
+    equation_list,
+    ~ eval(parse(text = paste0("cohort$risk_", horizon, "y_", .x)))
+  ) |>
+    set_names(equation_list)
+
+  data$time_to_event <- eval(parse(
+    text = paste0("cohort$time_to_event_", horizon, "y")
+  ))
+  data$outcome <- eval(parse(text = paste0("cohort$outcome_", horizon, "y")))
+
+  # Original Brier score calculation
+  brier <- riskRegression::Score(
+    parse_objects,
+    formula = Hist(time_to_event, outcome) ~ 1,
+    cens.method = "pseudo",
+    data = data,
+    times = horizon * 365.25,
+    cause = 1,
+    conf.int = TRUE,
+    metrics = "brier",
+    summary = "ipa",
+    contrasts = contrast_list
+  )
+
+  brier$Brier$contrasts
+}
+
+
+################################################################################
+# Reclassification tables ######################################################
+################################################################################
+
+# Create 2-year reclassification tables
+generate_reclass_table_2y <- function(data, risk_categories, title) {
+  # Ensure all levels are present in the data
+  data$cat_risk_2y_ckd_epi_2009_cr <- factor(
+    data$cat_risk_2y_ckd_epi_2009_cr,
+    levels = c(">40%", "≤40%")
+  )
+  risk_categories <- factor(risk_categories, levels = c(">40%", "≤40%"))
+  # Create a table of reclassification
+  table_raw <- table(data$cat_risk_2y_ckd_epi_2009_cr, risk_categories)
+  # Convert to percentages
+  table_percent <- prop.table(table_raw) * 100
+  # Format table to include both counts and percentages
+  table_final <- paste0(table_raw, " (", round(table_percent, 1), "%)")
+  # Convert to matrix for correct printing
+  dim(table_final) <- dim(table_raw)
+  dimnames(table_final) <- dimnames(table_raw)
+  # Return the formatted table using kable for markdown output
+  formatted_table <- knitr::kable(table_final, align = "c", caption = title) |>
+    kableExtra::kable_styling(
+      bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+      full_width = FALSE
+    ) |>
+    kableExtra::row_spec(0, bold = TRUE, background = "#D3D3D3") # Header row formatting
+
+  return(list(table = table_final, formatted_table = formatted_table))
+}
+
+# Create 5-year reclassification tables
+generate_reclass_table_5y <- function(data, risk_categories, title) {
+  # Ensure all levels are present in the data
+  data$cat_risk_5y_ckd_epi_2009_cr <- factor(
+    data$cat_risk_5y_ckd_epi_2009_cr,
+    levels = c("<3%", "3% - 5%", ">5%")
+  )
+  risk_categories <- factor(
+    risk_categories,
+    levels = c("<3%", "3% - 5%", ">5%")
+  )
+  # Create a table of reclassification
+  table_raw <- table(data$cat_risk_5y_ckd_epi_2009_cr, risk_categories)
+  # Convert to percentages
+  table_percent <- prop.table(table_raw) * 100
+  # Format table to include both counts and percentages
+  table_final <- paste0(table_raw, " (", round(table_percent, 1), "%)")
+  # Convert to matrix for correct printing
+  dim(table_final) <- dim(table_raw)
+  dimnames(table_final) <- dimnames(table_raw)
+  # Return the formatted table using kable for markdown output
+  formatted_table <- knitr::kable(table_final, align = "c", caption = title) |>
+    kableExtra::kable_styling(
+      bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+      full_width = FALSE
+    ) |>
+    kableExtra::row_spec(0, bold = TRUE, background = "#D3D3D3") # Header row formatting
+
+  return(list(table = table_final, formatted_table = formatted_table))
+}

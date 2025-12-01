@@ -1,0 +1,1250 @@
+# ##############################################################################
+#  Study: mGFR versus outcomes
+#
+#  Figures sized for the manuscript
+#  Update: 2025-02-10
+#  Author: Antoine Creon
+#  Change logs: none
+#
+# ##############################################################################
+
+
+################################################################################
+###                             PREPARE FUNCTIONS                            ###
+################################################################################
+
+pacman::p_load(tidyverse,
+               here,
+               labelled,
+               tidycmprsk, ggsurvfit, ggokabeito, patchwork, consort, ggforce, cowplot, grid,
+               gt, gtsummary,
+               qs, devEMF)
+
+
+#---------------------- Load data (numbers at risk) ----------------------------
+
+# data cleaned and covariates named
+data <- read_rds(file = here::here("data","cleaned","data_not_cens_kfrt_named.rds"))
+
+# Covariates to include in models, including kidney donor and kidney transplant recipient ; UACR not imputed
+covariates <- read_rds(file = here::here("data","cleaned","covariates_names.rds"))
+
+# Events (selected)
+events_wo_hf <- c("death", "rrt", "aki", "MACE_wo_HF")
+
+# predictors of interest
+predictors <- list("mgfr", "ckd_epi_2021_cr", "ckd_epi_2012_cys", "ckd_epi_2021_cr_cys")
+
+# Variable names
+var_names <- read_rds(file = here::here("data","cleaned","variable_names.rds"))
+
+
+#---------------------- Prepare settings for ggsave ----------------------------
+
+save_for_manuscript <- function(filename_wo_extension, plot, height = 164*1.5, width = 164) {
+
+   filnename <- glue::glue("{filename_wo_extension}.jpeg")
+
+   ggsave(filnename, plot = plot,
+          device =  ragg::agg_jpeg,
+          path = here::here("output", "manuscript"),
+          unit = "mm",
+          dpi = 300,
+          height = height, width = width)
+
+}
+
+#---------------------- Prepare themes for outcome plots -----------------------
+
+death_theme <- function(plot, ylim = c(0.45,3.1)){
+   plot +
+      labs(title = "All-cause mortality",
+           y = "Adjusted hazard ratio",
+           x = expression("Glomerular filtration rate, mL/min/1.73m"^2))  +
+      scale_x_continuous(breaks = c(15, 30, 45, 60, 75, 90, 120), limits = c(15,120), minor_breaks = c(75, 105)) +
+      scale_linewidth_manual(values = c(0.5, 1)) +  guides(linewidth = "none") +
+      ylim(ylim) +
+      theme_classic() +
+      theme(plot.title = element_text(size = 10), aspect.ratio = 0.8, , axis.title = element_text(size = 9))
+}
+
+KFRT_theme <- function(plot, cutoff, breaks = c(0.01, 0.1, 1, 10, 100, 1000)){
+
+   plot$data <- plot$data |>
+      mutate(lower = if_else(lower < cutoff, cutoff, lower))
+
+   plot +
+   labs(title = "Kidney failure with replacement \ntherapy",
+        y = expression("Adjusted hazard ratio"),
+        x = expression("Glomerular filtration rate, mL/min/1.73m"^2))  +
+   scale_x_continuous(breaks = c(15, 30, 45, 60, 75, 90, 120), limits = c(15,120), minor_breaks = c(75, 105)) +
+   scale_linewidth_manual(values = c(0.5, 1)) +  guides(linewidth = "none") +
+   scale_y_log10(breaks = breaks,
+                 labels = breaks) +
+   theme_classic() +
+   theme(plot.title = element_text(size = 10), aspect.ratio = 0.8, , axis.title = element_text(size = 9))
+}
+
+AKI_theme <- function(plot, ylim = c(0.5,6.2), breaks = c(1,2,3,4,5,6)){
+   plot +
+   labs(title = "Acute kidney injury",
+        y = "Adjusted hazard ratio",
+        x = expression("Glomerular filtration rate, mL/min/1.73m"^2))  +
+   scale_x_continuous(breaks = c(15, 30, 45, 60, 75, 90, 120), limits = c(15,120), minor_breaks = c(75, 105)) +
+   scale_linewidth_manual(values = c(0.5, 1)) +  guides(linewidth = "none") +
+   scale_y_continuous(breaks = breaks, limits = ylim, minor_breaks = c()) +
+   theme_classic() +
+   theme(plot.title = element_text(size = 10), aspect.ratio = 0.8, , axis.title = element_text(size = 9))
+}
+
+HF_theme <- function(plot, ylim = c(0.1,6), breaks = c(1,2,3,4,5,6)){
+   plot +
+      labs(title = "Heart failure",
+        y = "Adjusted hazard ratio",
+        x = expression("Glomerular filtration rate, mL/min/1.73m"^2))  +
+   scale_x_continuous(breaks = c(15, 30, 45, 60, 75, 90, 120), limits = c(15,120), minor_breaks = c(75, 105)) +
+   scale_y_continuous(breaks = breaks, limits = ylim, minor_breaks = c()) +
+   scale_linewidth_manual(values = c(0.5, 1)) +  guides(linewidth = "none") +
+   theme_classic() +
+   theme(plot.title = element_text(size = 10), aspect.ratio = 0.8, , axis.title = element_text(size = 9))
+}
+
+MACE_theme <- function(plot, ylim = c(0.35,6), breaks = c(1,2,3,4,5,6)){
+   plot +   # annotate("text", x = 90, y = 2,
+   labs(title = "Major adverse cardiovascular events",
+        y = "Adjusted hazard ratio",
+        x = expression("Glomerular filtration rate, mL/min/1.73m"^2))  +
+   scale_x_continuous(breaks = c(15, 30, 45, 60, 75, 90, 120), limits = c(15,120), minor_breaks = c(75, 105)) +
+   scale_y_continuous(breaks = breaks, limits = ylim, minor_breaks = c()) +
+   scale_linewidth_manual(values = c(0.5, 1)) +  guides(linewidth = "none") +
+   theme_classic() +
+   theme(plot.title = element_text(size = 10), aspect.ratio = 0.8, axis.title = element_text(size = 9))
+}
+
+MACE_zoomed_theme <- function(plot, ylim = c(0.35,3.3), breaks = c(1,2,3)){
+   plot +   # annotate("text", x = 90, y = 2,
+      scale_x_continuous(breaks = c(15, 30, 45, 60, 75, 90, 120), limits = c(15,120), minor_breaks = c(75, 105)) +
+      scale_y_continuous(breaks = breaks, limits = ylim) +  # Limit y-axis
+      scale_linewidth_manual(values = c(0.5, 1)) +
+      guides(linewidth = "none") +
+      labs(x = "", y = "") +
+      theme_classic() +
+      theme(legend.position = "none",  # Remove legend
+            plot.title = element_blank(),  # Remove title
+            plot.tag = element_blank(),  # Remove tag
+            axis.text = element_text(size = 6),
+            aspect.ratio = 0.8,
+            plot.background = element_rect(fill = "transparent", color = "transparent"),
+            panel.background = element_rect(fill = "white", color = "transparent"))   # Ensure no overlay effects
+}
+
+# baseline characteristics stratified by different GFR estimates
+## Create a variable to stratify on
+create_gfr_strata <- function(data, var_name) {
+  var <- sym(var_name) # Convert string to symbol
+  strat_var <- paste0(var_name, "_strat")
+
+  data %>%
+    mutate(
+      !!strat_var := case_when(
+        !!var < 30 ~ "<30 ml/min/1.72m²",
+        !!var >= 30 & !!var < 60 ~ "30-59 ml/min/1.72m²",
+        !!var >= 60 & !!var < 90 ~ "60-89 ml/min/1.72m²",
+        !!var >= 90 ~ "≥90 ml/min/1.72m²"
+      )
+    ) %>%
+    mutate(
+      !!strat_var := factor(
+        !!sym(strat_var),
+        levels = c(
+          "<30 ml/min/1.72m²",
+          "30-59 ml/min/1.72m²",
+          "60-89 ml/min/1.72m²",
+          "≥90 ml/min/1.72m²"
+        )
+      )
+    )
+}
+
+data |>
+  create_gfr_strata("ckd_epi_2021_cr") |>
+  relocate(ckd_epi_2021_cr_strat)
+
+
+# Create a table 1 identical to the main one but stratified differently
+make_table1 <- function(data, strat_var, clean_name) {
+  data |>
+    select(
+      names(var_names),
+      {{strat_var}},
+      -ihd,
+      -cevd,
+      -arrh,
+      -antihypertensives,
+      -mgfr_category
+    ) %>%
+    tbl_summary(
+      by = {{strat_var}},
+      statistic = list(
+        all_continuous() ~ "{median} ({p25}, {p75})",
+        all_categorical() ~ "{n} ({p}%)"
+      ),
+      missing = "no"
+    ) %>%
+    add_overall() |>
+    modify_header(label ~ "**Baseline Characteristics**") |>
+    modify_spanning_header(
+      c("stat_1", "stat_2", "stat_3", "stat_4") ~
+        md(glue::glue("**{clean_name} category**"))
+    ) |>
+    as_gt() %>%
+    # gt::opt_footnote_marks(marks = "extended")
+    gt::opt_footnote_marks(
+      marks = c(
+        "*",
+        "†",
+        "‡",
+        "§",
+        "¶",
+        "#",
+        "**",
+        "††",
+        "‡‡",
+        "§§",
+        "¶¶",
+        "##"
+      )
+    )
+}
+
+
+#------------------------- Prepare layout for HR tables ------------------------
+
+ref90 <- c("All-cause Mortality", "KFRT", "AKI", "Heart Failure", "MACE")
+
+prepare_table <- function(.table) {
+  .table |>
+  relocate(MACE, .after = `Heart Failure`) |>
+  rename_with(~ paste0("All-cause Mortality"), starts_with("All-cause")) |>
+  mutate(GFR = factor(GFR, levels = c(15, 30, 45, 60, 75, 90, 120))) |>
+  arrange(GFR) |>
+  mutate(predictor = str_replace_all(predictor, "\\[", "<sub>"),
+  predictor = str_replace_all(predictor, "\\]", "</sub>"),
+  across(ref90, ~ if_else(GFR == 90, "ref.", .x)))
+}
+
+
+
+make_gt_results <- function(.table) {
+   .table |>
+      gt(groupname_col = "predictor",
+         row_group_as_column = TRUE,
+         process_md = TRUE) |>
+      tab_options(table.font.size = 11) %>%
+      opt_footnote_marks(marks = "extended") |>
+      tab_style(style = cell_text(v_align = "middle", align = "center"), # center the vertical alignment
+                locations = list(cells_body(), cells_column_labels())) |>
+      tab_footnote(footnote = md("Glomerular filtration rate, ml/min/1.73m<sup>2</sup>"),
+                   locations = cells_column_labels(columns = "GFR")) |>
+      tab_footnote(footnote = md("Adjusted hazard ratio (95% confidence interval), with reference value 90 ml/min/1.73m<sup>2</sup>"),
+                   locations = cells_column_labels(columns = ref90)) |>
+      tab_footnote(footnote = md("AKI = Acute kidney injury;
+   GFR = glomerular filtration rate;
+   eGFR<sub>cr</sub> = estimated glomerular filtration rate based on creatinine;
+   eGFR<sub>cys</sub> = estimated glomerular filtration rate based on cystatin C;
+   eGFR<sub>cr-cys</sub> = estimated glomerular filtration rate based on creatinine and cystatin C;
+   mGFR = measured glomerular filtration rate;
+   KFRT = Kidney failure with replacement therapy;
+   MACE = Major adverse cardiovascular outcomes;
+   ref. = reference")) |>
+      gt::opt_footnote_marks(marks = "extended")
+}
+
+table_to_docx <- function(.table, filename_wo_extension) {
+   .table |>
+   gtsave(filename = glue::glue("{filename_wo_extension}.docx"),
+       path = here::here("output","manuscript"))
+}
+
+################################################################################
+###                                MAIN TEXT                                 ###
+################################################################################
+
+#------------------------------- Figure 1 -------------------------------------
+# Flowchart
+
+flowchart_df <- data.frame(
+  trialno = 1:(16473-6278),
+  exc1 = c(
+    # rep("mGFR measurements before January 1, 2011", 6278),
+    rep("No calculated mGFR", 936),
+    rep("mGFR <0", 1),
+    rep("mGFR >150", 43),
+    rep("Missing creatinine measurement", 305),
+    rep("Missing cystatin C measurement", 1256),
+    rep("Age <18 years", 1429),
+    rep("Prior dialysis", 51),
+    rep(NA, 16473 - 6278 - 936 - 1 - 43 - 305 - 1256 - 1429 - 51)
+  )
+)
+
+consort_plot(
+  data = flowchart_df,
+  orders = c(
+    trialno = "Patients with plasma iohexol testing during January 2011-December 2021 in Stockholm, Sweden",
+    exc1 = "Excluded",
+    trialno = "Included in this study"
+  ),
+  side_box = c("exc1"),
+  cex = 1
+)
+
+
+#-------------------------------- Figure 2 -------------------------------------
+# Distribution of GFR
+
+load(file = here::here("output","r_objects","gfr_distrib_plot.rda"))
+
+save_for_manuscript("Figure2_eGFR-distribution", gfr_distrib_plot,
+                    height = 164*0.5, width = 164*0.5)
+
+
+#------------------------- Text for figures 3 and 4 ----------------------------
+
+# Numbers at risk to add to the HR vs GFR plots
+# clean_names <- c("death" = "All-cause Death",
+#                  "rrt" = "KFRT",
+#                  "aki" = "AKI",
+#                  "MACE_wo_HF" = "MACE")
+
+nb_at_risk <- data %>%
+  ungroup() |> 
+   summarise(
+    "At risk - death" = n(), 
+    "At risk - kidney failure" = n(), 
+    "At risk - MACE" = sum(history_stroke == 0 & history_mi == 0), 
+    "At risk - HF" = sum(hf == 0), 
+    "At risk - AKI" = sum(history_aki == 0), 
+    "No. events - death" = sum(death == 1), 
+    "No. events - kidney failure" = sum(rrt == 1), 
+    "No. events - MACE" = sum(history_stroke == 0 & history_mi == 0 & MACE_wo_HF), 
+    "No. events - HF" = sum(hf == 0 & heart_failure), 
+    "No. events - AKI" = sum(history_aki == 0 & aki),
+    # "No. events - death (full pop)" = sum(death == 1), 
+    # "No. events - kidney failure (full pop)" = sum(rrt == 1), 
+    # "No. events - MACE (full pop)" = sum(MACE_wo_HF), 
+    # "No. events - HF (full pop)" = sum(heart_failure), 
+    # "No. events - AKI (full pop)" = sum(aki)
+  ) %>%
+  pivot_longer(
+    cols = starts_with("At risk") | starts_with("No. events"),
+    names_to = c(".value", "outcome"),
+    names_pattern = "^(At risk|No\\. events) - (.*)$"
+  ) %>%
+  rename(
+    nb_at_risk = `At risk`,
+    nb_events = `No. events`
+  )
+
+# nb_at_risk <- data %>%
+#    filter(hf == 0) %>%
+#    summarise("Individuals at risk" = n(), heart_failure = sum(heart_failure)) %>%
+#    pivot_longer(cols = heart_failure, names_to = "Events", values_to = "Count") |>
+#    rbind(nb_at_risk)
+
+
+#------------------------------- Figure 3 --------------------------------------
+# Adjusted HR for death and KFRT
+
+load(file = here::here("output","r_objects","gfr-vs-outcomes_MICE_withKTR_cs.rda"))
+
+death <- MICE_withKTR_cs$`All-cause Death`  |> death_theme()
+
+KFRT <- MICE_withKTR_cs$KFRT |>  KFRT_theme(cutoff = 0.01)
+
+panel_death_kfrt <- death + KFRT +
+   plot_layout(guides = "collect") +
+   plot_annotation(tag_levels = 'A') &
+   theme(legend.position='bottom',
+         legend.text = element_text(size = 8),
+         legend.key.size = unit(0.2, "cm"))
+
+save_for_manuscript("Figure3_death-kfrt", panel_death_kfrt, height = 164*0.6)
+
+
+#------------------------------- Figure 4 --------------------------------------
+# Adjusted HR for AKI, MACE, HF
+
+AKI <- MICE_withKTR_cs$AKI +
+   # annotate("text", x = 90, y = 4,
+   #          label = paste0("No. of events/individuals \nat risk: ", nb_at_risk$Count[which(nb_at_risk$Events == "aki")], "/", nb_at_risk$`Individuals at risk`[which(nb_at_risk$Events == "aki")]),
+   #          size = 2.5) +
+   labs(title = "Acute kidney injury",
+        tag = "A",
+        y = "Adjusted hazard ratio",
+        x = expression("Glomerular filtration rate, mL/min/1.73m"^2))  +
+   scale_x_continuous(breaks = c(15, 30, 45, 60, 75, 90, 120), limits = c(15,120), minor_breaks = c(75, 105)) +
+   scale_linewidth_manual(values = c(0.5, 1)) +  guides(linewidth = "none") +
+   scale_y_continuous(breaks = c(1,2,3,4,5,6), limits = c(0.5,6.2), minor_breaks = c()) +
+   theme_classic() +
+   theme(plot.title = element_text(size = 10), aspect.ratio = 0.8, , axis.title = element_text(size = 9))
+
+HF <- MICE_withKTR_cs$`Heart Failure` +
+   # annotate("text", x = 90, y = 3,
+   #          label = paste0("No. of events/individuals \nat risk: ", nb_at_risk$Count[which(nb_at_risk$Events == "heart_failure")], "/", nb_at_risk$`Individuals at risk`[which(nb_at_risk$Events == "heart_failure")]),
+   #          size = 2.5) +
+   labs(title = "Heart failure",
+        tag = "B",
+        y = "Adjusted hazard ratio",
+        x = expression("Glomerular filtration rate, mL/min/1.73m"^2))  +
+   scale_x_continuous(breaks = c(15, 30, 45, 60, 75, 90, 120), limits = c(15,120), minor_breaks = c(75, 105)) +
+   scale_y_continuous(breaks = c(1,2,3,4,5,6), limits = c(0.1,6), minor_breaks = c()) +
+   scale_linewidth_manual(values = c(0.5, 1)) +  guides(linewidth = "none") +
+   theme_classic() +
+   theme(plot.title = element_text(size = 10), aspect.ratio = 0.8, , axis.title = element_text(size = 9))
+
+MACE <- MICE_withKTR_cs$MACE +
+   # annotate("text", x = 90, y = 2,
+   #          label = paste0("No. of events/individuals \nat risk: ", nb_at_risk$Count[which(nb_at_risk$Events == "MACE_wo_HF")], "/", nb_at_risk$`Individuals at risk`[which(nb_at_risk$Events == "MACE_wo_HF")]),
+   #          size = 2.5) +
+   labs(title = "Major adverse cardiovascular events",
+        tag = "C",
+        y = "Adjusted hazard ratio",
+        x = expression("Glomerular filtration rate, mL/min/1.73m"^2))  +
+   scale_x_continuous(breaks = c(15, 30, 45, 60, 75, 90, 120), limits = c(15,120), minor_breaks = c(75, 105)) +
+   scale_y_continuous(breaks = c(1,2,3,4,5,6), limits = c(0.35,6), minor_breaks = c()) +
+   scale_linewidth_manual(values = c(0.5, 1)) +  guides(linewidth = "none") +
+   theme_classic() +
+   theme(plot.title = element_text(size = 10), aspect.ratio = 0.8, axis.title = element_text(size = 9))
+
+# Create the zoomed-in inset plot (excluding legend & annotation)
+MACE_zoomed <- MICE_withKTR_cs$MACE +
+   scale_x_continuous(breaks = c(15, 30, 45, 60, 75, 90, 120), limits = c(15,120), minor_breaks = c(75, 105)) +
+   scale_y_continuous(breaks = c(1,2,3), limits = c(0.35,3.3)) +  # Limit y-axis
+   scale_linewidth_manual(values = c(0.5, 1)) +
+   guides(linewidth = "none") +
+   labs(x = "", y = "") +
+   theme_classic() +
+   theme(legend.position = "none",  # Remove legend
+         plot.title = element_blank(),  # Remove title
+         plot.tag = element_blank(),  # Remove tag
+         axis.text = element_text(size = 6),
+         aspect.ratio = 0.8,
+         plot.background = element_rect(fill = "transparent", color = "transparent"),
+         panel.background = element_rect(fill = "white", color = "transparent"))   # Ensure no overlay effects
+
+# Overlay the zoomed-in plot on the main plot
+final_plot <- MACE +
+   annotation_custom(ggplotGrob(MACE_zoomed),
+                     xmin = 15, xmax = 130, ymin = 1, ymax = 6.5)
+
+panel_aki_hf_mace <- (AKI + HF + final_plot + plot_spacer()) +
+   plot_layout(ncol = 2, nrow = 2, guides = "collect") &
+   theme(legend.position = "bottom",
+         legend.text = element_text(size = 8),
+         legend.key.size = unit(0.2, "cm"))
+
+save_for_manuscript("Figure4_aki-hf-mace", panel_aki_hf_mace, height = 164, width = 164)
+
+
+
+#------------------------- Figure 4 INCIDENT EVENTS  ---------------------------
+# Adjusted HR for AKI, MACE, HF
+
+load(file = here::here("output","r_objects","incident_indiv_plot.rda"))
+
+MICE_withKTR_cs <- incident_indiv_plot
+
+limits_incident_events_y <-  c(0.4,6.5)
+
+AKI <- MICE_withKTR_cs$AKI +
+   # annotate("text", x = 90, y = 4,
+   #          label = paste0("No. of events/individuals \nat risk: ", nb_at_risk$Count[which(nb_at_risk$Events == "aki")], "/", nb_at_risk$`Individuals at risk`[which(nb_at_risk$Events == "aki")]),
+   #          size = 2.5) +
+   labs(title = "Acute kidney injury",
+        tag = "A",
+        y = "Adjusted hazard ratio",
+        x = expression("Glomerular filtration rate, mL/min/1.73m"^2))  +
+   scale_x_continuous(breaks = c(15, 30, 45, 60, 75, 90, 120), limits = c(15,120), minor_breaks = c(75, 105)) +
+   scale_linewidth_manual(values = c(0.5, 1)) +  guides(linewidth = "none") +
+   scale_y_continuous(breaks = c(1,2,3,4,5,6), limits = limits_incident_events_y, minor_breaks = c()) +
+   theme_classic() +
+   theme(plot.title = element_text(size = 10), aspect.ratio = 0.8, , axis.title = element_text(size = 9))
+
+HF <- MICE_withKTR_cs$`Heart Failure` +
+   # annotate("text", x = 90, y = 3,
+   #          label = paste0("No. of events/individuals \nat risk: ", nb_at_risk$Count[which(nb_at_risk$Events == "heart_failure")], "/", nb_at_risk$`Individuals at risk`[which(nb_at_risk$Events == "heart_failure")]),
+   #          size = 2.5) +
+   labs(title = "Heart failure",
+        tag = "B",
+        y = "Adjusted hazard ratio",
+        x = expression("Glomerular filtration rate, mL/min/1.73m"^2))  +
+   scale_x_continuous(breaks = c(15, 30, 45, 60, 75, 90, 120), limits = c(15,120), minor_breaks = c(75, 105)) +
+   scale_y_continuous(breaks = c(1,2,3,4,5,6), limits = limits_incident_events_y, minor_breaks = c()) +
+   scale_linewidth_manual(values = c(0.5, 1)) +  guides(linewidth = "none") +
+   theme_classic() +
+   theme(plot.title = element_text(size = 10), aspect.ratio = 0.8, , axis.title = element_text(size = 9))
+
+MACE <- MICE_withKTR_cs$MACE +
+   # annotate("text", x = 90, y = 2,
+   #          label = paste0("No. of events/individuals \nat risk: ", nb_at_risk$Count[which(nb_at_risk$Events == "MACE_wo_HF")], "/", nb_at_risk$`Individuals at risk`[which(nb_at_risk$Events == "MACE_wo_HF")]),
+   #          size = 2.5) +
+   labs(title = "Major adverse cardiovascular events",
+        tag = "C",
+        y = "Adjusted hazard ratio",
+        x = expression("Glomerular filtration rate, mL/min/1.73m"^2))  +
+   scale_x_continuous(breaks = c(15, 30, 45, 60, 75, 90, 120), limits = c(15,120), minor_breaks = c(75, 105)) +
+   scale_y_continuous(breaks = c(1,2,3,4,5,6), limits = limits_incident_events_y, minor_breaks = c()) +
+   scale_linewidth_manual(values = c(0.5, 1)) +  guides(linewidth = "none") +
+   theme_classic() +
+   theme(plot.title = element_text(size = 10), aspect.ratio = 0.8, axis.title = element_text(size = 9))
+
+# Create the zoomed-in inset plot (excluding legend & annotation)
+MACE_zoomed <- MICE_withKTR_cs$MACE +
+   scale_x_continuous(breaks = c(15, 30, 45, 60, 75, 90, 120), limits = c(15,120), minor_breaks = c(75, 105)) +
+   scale_y_continuous(breaks = c(1,2,3), limits = c(0.35,3.3)) +  # Limit y-axis
+   scale_linewidth_manual(values = c(0.5, 1)) +
+   guides(linewidth = "none") +
+   labs(x = "", y = "") +
+   theme_classic() +
+   theme(legend.position = "none",  # Remove legend
+         plot.title = element_blank(),  # Remove title
+         plot.tag = element_blank(),  # Remove tag
+         axis.text = element_text(size = 6),
+         aspect.ratio = 0.8,
+         plot.background = element_rect(fill = "transparent", color = "transparent"),
+         panel.background = element_rect(fill = "white", color = "transparent"))   # Ensure no overlay effects
+
+# Overlay the zoomed-in plot on the main plot
+final_plot <- MACE +
+   annotation_custom(ggplotGrob(MACE_zoomed),
+                     xmin = 15, xmax = 130, ymin = 1, ymax = 6.5)
+
+panel_aki_hf_mace <- (AKI + HF + final_plot + plot_spacer()) +
+   plot_layout(ncol = 2, nrow = 2, guides = "collect") &
+   theme(legend.position = "bottom",
+         legend.text = element_text(size = 8),
+         legend.key.size = unit(0.2, "cm"))
+
+save_for_manuscript("Figure4_aki-hf-mace_Incident-events-only", panel_aki_hf_mace, height = 164, width = 164)
+
+
+#------------------------ Table baseline characteristics -----------------------
+
+load(file = here::here("output","r_objects","table1.rda"))
+
+table1 |>
+   gtsave(filename = "table1.docx",
+          path = here::here("output","manuscript"))
+
+
+#-------------------------------- Table key HRs --------------------------------
+
+load(file = here::here("output","r_objects","gfr-vs-outcomes_MICE_withKTR_cs_tbl.rda"))
+load(file = here::here("output","r_objects","incident_indiv_tbl.rda"))
+incident_indiv_tbl <- incident_indiv_tbl %>% 
+   rename(GFR = x1,
+          `Heart Failure` = `Heart failure`)
+   
+
+# Add footnotes
+# maybe group columns directly in word
+MICE_withKTR_cs_tbl |>
+   select(predictor, GFR, `All-cause Death`,  KFRT ) %>% 
+   right_join(incident_indiv_tbl, by = c("predictor", "GFR")) %>% 
+   prepare_table() |>
+   make_gt_results() |>
+   table_to_docx("Table2_main-analysis")
+
+
+   # MICE_withKTR_cs_tbl |>
+#    rename(`All-cause Mortality` = `All-cause Death`) |>
+#    pivot_longer(cols = ref90, names_to = "Outcome", values_to = "HR") |>
+#    pivot_wider(names_from = predictor, values_from = HR) |>
+#
+#    mutate(GFR = factor(GFR, levels = c(15, 30, 45, 60, 90, 120))) |>
+#    arrange(Outcome, GFR) |>
+#    # mutate(predictor = str_replace_all(predictor, "\\[", "<sub>"),
+#    #        predictor = str_replace_all(predictor, "\\]", "</sub>"),
+#    mutate(across(3:6, ~ if_else(GFR == 90, "ref.", .x))) |>
+#    gt(groupname_col = "Outcome",
+#       row_group_as_column = TRUE,
+#       process_md = TRUE) |>
+#    tab_options(table.font.size = 11) %>%
+#    opt_footnote_marks(marks = "extended") |>
+#    tab_style(style = cell_text(v_align = "middle", align = "center"), # center the vertical alignment
+#              locations = list(cells_body(), cells_column_labels())) |>
+#    tab_footnote(footnote = md("Glomerular filtration rate, ml/min/1.73m<sup>2</sup>"),
+#                 locations = cells_column_labels(columns = "GFR"))
+
+################################################################################
+###                         SUPPLEMENTARY FIGURES                            ###
+################################################################################
+
+#------------------------------- Figure S1 -------------------------------------
+# Study diagram
+
+#------------------------------- Figure S1 -------------------------------------
+# Correlogram of mGFR, eGFRcr, eGFRcys and eGFRcr-cys (cf dedicated script)
+
+#------------------------------- Figure S3 -------------------------------------
+# Untruncated KFRT
+
+load(
+  file = here::here(
+    "output",
+    "r_objects",
+    "gfr-vs-outcomes_MICE_withKTR_cs.rda"
+  )
+)
+
+KFRT_untruncated <- MICE_withKTR_cs$KFRT |>
+  KFRT_theme(
+    cutoff = 0.0001,
+    breaks = c(0.0001, 0.001, 0.01, 0.1, 1, 10, 100, 1000)
+  ) +
+  theme(
+    plot.title = element_text(size = 10),
+    aspect.ratio = 0.8,
+    axis.title = element_text(size = 9),
+    legend.position = "inside",
+    legend.justification = c(0.1, 0.01),
+    legend.text = element_text(size = 8),
+    legend.key.size = unit(0.2, "cm"),
+    legend.spacing = unit(0.1, "cm")
+  )
+
+save_for_manuscript(
+  "FigureS3-untruncated-KF",
+  KFRT_untruncated,
+  height = 164 * 0.5,
+  width = 164 * 0.5
+)
+
+#-------------------------------- Figure S4 ------------------------------------
+# EKFC
+
+load(file = here::here("output","r_objects","eGFR-EKFC_distribution.rda"))
+load(file = here::here("output","r_objects","EKFC_plots.rda"))
+
+gfr_EKFC_manuscript <- gfr_distrib_EKFC_plot +
+  scale_linewidth_manual(values = c(0.5, 1)) +
+  scale_x_continuous(
+    breaks = c(15, 30, 45, 60, 75, 90, 120),
+    limits = c(15, 120),
+    minor_breaks = c(75, 105)
+  ) +
+  labs(
+    tag = NULL,
+    title = "Glomerular filtration rate distribution",
+    x = expression("Glomerular filtration rate, mL/min/1.73m"^2)
+  ) +
+  ylim(c(0, 0.0175)) +
+  theme_classic() +
+  theme(
+    plot.title = element_text(size = 10),
+    aspect.ratio = 0.8,
+    axis.title = element_text(size = 9),
+    legend.position = "none",
+    legend.justification = c(0.1, 1),
+    legend.text = element_text(size = 8),
+    legend.key.size = unit(0.2, "cm"),
+    legend.spacing = unit(0.1, "cm")
+  )
+
+
+EKFC_death <- EKFC_plots$`All-cause Death` |> death_theme(ylim = c(0.3,3.8)) 
+
+EKFC_KFRT <- EKFC_plots$KFRT |> KFRT_theme(cutoff = 0.01) 
+
+ylim_EKFC <- c(0.1,8)
+breaks_EKFC <- 1:7
+
+EKFC_AKI <- EKFC_plots$AKI |> AKI_theme(ylim = ylim_EKFC, breaks = breaks_EKFC)  
+
+EKFC_HF <- EKFC_plots$HF |> HF_theme(ylim = ylim_EKFC, breaks = breaks_EKFC)  
+# Create the zoomed-in inset plot (excluding legend & annotation)
+# EKFC_HF_zoomed <- EKFC_HF |> MACE_zoomed_theme(ylim = c(0.15,4.65), breaks = 1:4)
+# Overlay the zoomed-in plot on the main plot
+# complete_EKFC_HF <- EKFC_HF +
+#    annotation_custom(ggplotGrob(EKFC_HF_zoomed),
+#                      xmin = 40, xmax = 125, ymin = 1.5, ymax = 8.5)
+
+
+EKFC_MACE <- EKFC_plots$MACE |> MACE_theme(ylim = ylim_EKFC, breaks = breaks_EKFC)  
+# Create the zoomed-in inset plot (excluding legend & annotation)
+EKFC_MACE_zoomed <- EKFC_MACE |> MACE_zoomed_theme(ylim = c(0.15,4.45), breaks = 1:4)  
+# Overlay the zoomed-in plot on the main plot
+complete_EKFC_MACE <- EKFC_MACE +
+   # inset_element(EKFC_MACE_zoomed, left = 0.05, right = 1.0, bottom = 0.2, top = 0.8)
+    annotation_custom(ggplotGrob(EKFC_MACE_zoomed),
+                      xmin = 05, xmax = 130, ymin = 1.5, ymax = 8)
+
+panel_EKFC <- (gfr_EKFC_manuscript + EKFC_death + EKFC_KFRT + EKFC_AKI + EKFC_HF + complete_EKFC_MACE) +
+   plot_layout(ncol = 2, nrow = 3, guides = "collect") +
+   plot_annotation(tag_levels = 'A') &
+   theme(legend.position = "bottom",
+         legend.text = element_text(size = 8),
+         legend.key.size = unit(0.2, "cm"))
+
+save_for_manuscript("FigureS4_EKFC", panel_EKFC, height = 164*1.5, width = 164)
+
+
+
+#-------------------------------- Figure S5  -----------------------------------
+# CKDEPI 2009
+
+load(file = here::here("output","r_objects","eGFR-CKDEPI2009_distribution.rda"))
+load(file = here::here("output","r_objects","CKDEPI2009_plots.rda"))
+
+gfr_CKDEPI2009_manuscript <- gfr_distrib_CKDEPI2009_plot +
+   scale_linewidth_manual(values = c(0.5, 1)) +
+   scale_x_continuous(breaks = c(15, 30, 45, 60, 75, 90, 120), limits = c(15,120), minor_breaks = c(105)) +
+   labs(tag = NULL,
+        title = "Glomerular filtration rate distribution",
+        x = expression("Glomerular filtration rate, mL/min/1.73m"^2)) +
+   ylim(c(0,0.0175)) +
+   theme_classic() +
+   theme(plot.title = element_text(size = 10),
+         aspect.ratio = 0.8,
+         axis.title = element_text(size = 9),
+         legend.position = "none",
+         legend.justification = c(0.1,1),
+         legend.text = element_text(size = 8),
+         legend.key.size = unit(0.2, "cm"),
+         legend.spacing = unit(0.1, "cm"))
+
+
+CKDEPI2009_death <- CKDEPI2009_plots$`All-cause Death` |> death_theme(ylim = c(0.3,3.1))
+
+CKDEPI2009_KFRT <- CKDEPI2009_plots$KFRT |> KFRT_theme(cutoff = 0.01)
+
+ylim_CKDEPI2009 <- c(0.1,6.5)
+breaks_CKDEPI2009 <- 1:6
+
+CKDEPI2009_AKI <- CKDEPI2009_plots$AKI |> AKI_theme(ylim = ylim_CKDEPI2009, breaks = breaks_CKDEPI2009)
+
+CKDEPI2009_HF <- CKDEPI2009_plots$HF |> HF_theme(ylim = ylim_CKDEPI2009, breaks = breaks_CKDEPI2009)
+
+CKDEPI2009_MACE <- CKDEPI2009_plots$MACE |> MACE_theme(ylim = ylim_CKDEPI2009, breaks = breaks_CKDEPI2009)
+
+# Create the zoomed-in inset plot (excluding legend & annotation)
+CKDEPI2009_MACE_zoomed <- CKDEPI2009_MACE |> MACE_zoomed_theme(ylim = c(0.15,3.5), breaks = 1:4)
+
+# Overlay the zoomed-in plot on the main plot
+complete_CKDEPI2009_MACE <- CKDEPI2009_MACE +
+   annotation_custom(ggplotGrob(CKDEPI2009_MACE_zoomed),
+                     xmin = 15, xmax = 130, ymin = 1, ymax = 7)
+
+panel_CKDEPI2009 <- (gfr_CKDEPI2009_manuscript + CKDEPI2009_death + CKDEPI2009_KFRT + CKDEPI2009_AKI + CKDEPI2009_HF + complete_CKDEPI2009_MACE) +
+   plot_layout(ncol = 2, nrow = 3, guides = "collect") +
+   plot_annotation(tag_levels = 'A') &
+   theme(legend.position = "bottom",
+         legend.text = element_text(size = 8),
+         legend.key.size = unit(0.2, "cm"))
+
+save_for_manuscript("FigureS5_CKDEPI2009-12", panel_CKDEPI2009, height = 164*1.5, width = 164)
+
+install.packages("patchwork", version='0.9.1')
+install.packages("ggplot2", version='1.3.0')
+library(patchwork)
+
+#-------------------------------- Figure S6  -----------------------------------
+# WO UACR ENRICHMENT
+
+load(file = here::here("output","r_objects","MICE_wo-UACR-conversion.rda"))
+wo_UACR_plots <- wo_converted_UACR
+
+wo_UACR_death <- wo_UACR_plots$`All-cause Death` |> death_theme(ylim = c(0.3,3.1))
+
+wo_UACR_KFRT <- wo_UACR_plots$KFRT |> KFRT_theme(cutoff = 0.01)
+
+ylim_wo_UACR <- c(0.1,6.5)
+breaks_wo_UACR <- 1:6
+
+wo_UACR_AKI <- wo_UACR_plots$AKI |> AKI_theme(ylim = ylim_wo_UACR, breaks = breaks_wo_UACR)
+
+wo_UACR_HF <- wo_UACR_plots$HF |> HF_theme(ylim = ylim_wo_UACR, breaks = breaks_wo_UACR)
+
+wo_UACR_MACE <- wo_UACR_plots$MACE |> MACE_theme(ylim = ylim_wo_UACR, breaks = breaks_wo_UACR)
+
+# Create the zoomed-in inset plot (excluding legend & annotation)
+wo_UACR_MACE_zoomed <- wo_UACR_MACE |> MACE_zoomed_theme(ylim = c(0.15,3.5), breaks = 1:4)
+
+# Overlay the zoomed-in plot on the main plot
+complete_wo_UACR_MACE <- wo_UACR_MACE +
+   annotation_custom(ggplotGrob(wo_UACR_MACE_zoomed),
+                     xmin = 15, xmax = 130, ymin = 1, ymax = 7)
+
+panel_wo_UACR <- (wo_UACR_death + wo_UACR_KFRT + wo_UACR_AKI + wo_UACR_HF + complete_wo_UACR_MACE + plot_spacer()) +
+   plot_layout(ncol = 2, nrow = 3, guides = "collect") +
+   plot_annotation(tag_levels = 'A') &
+   theme(legend.position = "bottom",
+         legend.text = element_text(size = 8),
+         legend.key.size = unit(0.2, "cm"))
+
+save_for_manuscript("FigureS6_wo-UACR-enrichment", panel_wo_UACR, height = 164*1.5, width = 164)
+
+
+#-------------------------------- Figure S7  -----------------------------------
+# WO KTR
+
+load(file = here::here("output","r_objects","gfr-vs-outcomes_MICE_withoutKTR_cs.rda"))
+load(file = here::here("output","r_objects","woKTR_tbl.rda"))
+
+
+gfr_distrib_woKTR <- data |>
+   filter(transplant == 0) |>
+   select(mgfr, ckd_epi_2021_cr, ckd_epi_2012_cys, ckd_epi_2021_cr_cys) |>
+   pivot_longer(cols = everything(), names_to = "Equation", values_to = "GFR") |>
+   mutate(Equation = factor(Equation, levels = c("mgfr", "ckd_epi_2021_cr", "ckd_epi_2012_cys", "ckd_epi_2021_cr_cys")),
+          linesize = if_else(Equation == "mgfr", 1, 0))
+
+.palette <- palette_okabe_ito(c(1,3,5,7))
+
+.custom_labels <- c(expression("mGFR"),
+                    expression(paste("eGFR"[cr])),
+                    expression(paste("eGFR"[cys])),
+                    expression(paste("eGFR"[cr-cys])))
+
+gfr_distrib_woKTR_plot <- gfr_distrib_woKTR |>
+   ggplot(aes(x = GFR, color = Equation, fill = Equation, linewidth = factor(linesize))) +
+   geom_density(alpha = 0.2, position="identity") +
+   scale_color_manual(name = NULL, values = .palette, labels = .custom_labels) +
+   scale_fill_manual(name = NULL, values = .palette, labels = .custom_labels) +
+   guides(linewidth = "none", color = "none", fill = "none") +
+   scale_linewidth_manual(values = c(0.5, 1)) +
+   scale_x_continuous(breaks = c(15, 30, 45, 60, 90, 120), limits = c(15,120), minor_breaks = c(75, 105)) +
+   labs(title = "Glomerular filtration rate distribution",
+        x = expression("Glomerular filtration rate, mL/min/1.73m"^2)) +
+   ylim(c(0,0.0175)) +
+   theme_classic() +
+   theme(plot.title = element_text(size = 10),
+         aspect.ratio = 0.8,
+         axis.title = element_text(size = 9),
+         legend.position = "none",
+         legend.justification = c(0.1,1),
+         legend.text = element_text(size = 8),
+         legend.key.size = unit(0.2, "cm"),
+         legend.spacing = unit(0.1, "cm"))
+
+
+withoutKTR_death <- woKTR_plots$`All-cause Death` |> death_theme(ylim = c(0.3,3.1))
+
+withoutKTR_KFRT <- woKTR_plots$KFRT |> KFRT_theme(cutoff = 0.01)
+
+ylim_withoutKTR <- c(0.1,6.5)
+breaks_withoutKTR <- 1:6
+
+withoutKTR_AKI <- woKTR_plots$AKI |> AKI_theme(ylim = ylim_withoutKTR, breaks = breaks_withoutKTR)
+
+withoutKTR_HF <- woKTR_plots$HF |> HF_theme(ylim = ylim_withoutKTR, breaks = breaks_withoutKTR)
+
+withoutKTR_MACE <- woKTR_plots$MACE |> MACE_theme(ylim = ylim_withoutKTR, breaks = breaks_withoutKTR)
+
+# Create the zoomed-in inset plot (excluding legend & annotation)
+withoutKTR_MACE_zoomed <- withoutKTR_MACE |> MACE_zoomed_theme(ylim = c(0.15,3.5), breaks = 1:4)
+
+# Overlay the zoomed-in plot on the main plot
+complete_withoutKTR_MACE <- withoutKTR_MACE +
+   annotation_custom(ggplotGrob(withoutKTR_MACE_zoomed),
+                     xmin = 15, xmax = 130, ymin = 1, ymax = 7)
+
+panel_withoutKTR <- (gfr_distrib_woKTR_plot + withoutKTR_death + withoutKTR_KFRT + withoutKTR_AKI + withoutKTR_HF + complete_withoutKTR_MACE) +
+   plot_layout(ncol = 2, nrow = 3, guides = "collect") +
+   plot_annotation(tag_levels = 'A') &
+   theme(legend.position = "bottom",
+         legend.text = element_text(size = 8),
+         legend.key.size = unit(0.2, "cm"))
+
+save_for_manuscript("FigureS7_wo-KTR", panel_withoutKTR, height = 164*1.5, width = 164)
+
+
+
+#-------------------------------- Figure S8  -----------------------------------
+# WO PREVALENT HF
+
+# load(file = here::here("output", "r_objects", "excl_hf_plot.rda"))
+
+# gfr_distrib_woHF <- data |>
+#    filter(hf == 0) |>
+#    select(mgfr, ckd_epi_2021_cr, ckd_epi_2012_cys, ckd_epi_2021_cr_cys) |>
+#    pivot_longer(cols = everything(), names_to = "Equation", values_to = "GFR") |>
+#    mutate(Equation = factor(Equation, levels = c("mgfr", "ckd_epi_2021_cr", "ckd_epi_2012_cys", "ckd_epi_2021_cr_cys")),
+#           linesize = if_else(Equation == "mgfr", 1, 0))
+
+# .palette <- palette_okabe_ito(c(1,3,5,7))
+
+# .custom_labels <- c(expression("mGFR"),
+#                     expression(paste("eGFR"[cr])),
+#                     expression(paste("eGFR"[cys])),
+#                     expression(paste("eGFR"[cr-cys])))
+
+# gfr_distrib_woHF_plot <- gfr_distrib_woHF |>
+#    ggplot(aes(x = GFR, color = Equation, fill = Equation, linewidth = factor(linesize))) +
+#    geom_density(alpha = 0.2, position="identity") +
+#    scale_color_manual(name = NULL, values = .palette, labels = .custom_labels) +
+#    scale_fill_manual(name = NULL, values = .palette, labels = .custom_labels) +
+#    guides(linewidth = "none", color = "none", fill = "none") +
+#    scale_linewidth_manual(values = c(0.5, 1)) +
+#    scale_x_continuous(breaks = c(15, 30, 45, 60, 90, 120), limits = c(15,120), minor_breaks = c(75, 105)) +
+#    labs(title = "Glomerular filtration rate distribution",
+#         x = expression("Glomerular filtration rate, mL/min/1.73m"^2)) +
+#    ylim(c(0,0.0175)) +
+#    theme_classic() +
+#    theme(plot.title = element_text(size = 10),
+#          aspect.ratio = 0.8,
+#          axis.title = element_text(size = 9),
+#          legend.position = "none",
+#          legend.justification = c(0.1,1),
+#          legend.text = element_text(size = 8),
+#          legend.key.size = unit(0.2, "cm"),
+#          legend.spacing = unit(0.1, "cm"))
+
+# wo_HF_death <- excl_hf_plot$`All-cause Death` |> death_theme(ylim = c(0.3,3.1))
+
+# wo_HF_KFRT <- excl_hf_plot$KFRT |> KFRT_theme(cutoff = 0.01)
+
+# ylim_wo_HF <- c(0.1, 7.2)
+# breaks_wo_HF <- 1:6
+
+# wo_HF_AKI <- excl_hf_plot$AKI |>
+#   AKI_theme(ylim = ylim_wo_HF, breaks = breaks_wo_HF)
+
+# wo_HF_HF <- excl_hf_plot$`Heart Failure` |>
+#   HF_theme(ylim = ylim_wo_HF, breaks = breaks_wo_HF)
+
+# wo_HF_MACE <- excl_hf_plot$MACE |>
+#   MACE_theme(ylim = ylim_wo_HF, breaks = breaks_wo_HF)
+
+# # Create the zoomed-in inset plot (excluding legend & annotation)
+# wo_HF_MACE_zoomed <- wo_HF_MACE |> MACE_zoomed_theme(ylim = c(0.15,3.1), breaks = 1:3)
+
+# # Overlay the zoomed-in plot on the main plot
+# complete_wo_HF_MACE <- wo_HF_MACE +
+#    annotation_custom(ggplotGrob(wo_HF_MACE_zoomed),
+#                      xmin = 15, xmax = 130, ymin = 0.8, ymax = 7.8)
+
+# panel_wo_HF <- (
+#   gfr_distrib_woHF_plot +
+#   wo_HF_death +
+#   wo_HF_KFRT +
+#   wo_HF_AKI +
+#   wo_HF_HF +
+#   complete_wo_HF_MACE) +
+#   plot_layout(ncol = 2, nrow = 3, guides = "collect") +
+#   plot_annotation(tag_levels = 'A') &
+#   theme(
+#     legend.position = "bottom",
+#     legend.text = element_text(size = 8),
+#     legend.key.size = unit(0.2, "cm")
+#   )
+
+# save_for_manuscript(
+#   "FigureS8_wo-history-HF",
+#   panel_wo_HF,
+#   height = 164 * 1.5,
+#   width = 164
+# )
+
+#-------------------------------- Figure S8  -----------------------------------
+# SMC-FCS
+
+load(file = here::here("output","r_objects","gfr-vs-outcomes_smcfcs_withKTR_cs_plots.rda"))
+
+death_SMCFCS <- smcfcs_withKTR_cs_plots[[3]] |>  death_theme()
+KFRT_SMCFCS <- smcfcs_withKTR_cs_plots[[1]] |>  KFRT_theme(cutoff = 0.02)
+AKI_SMCFCS <- smcfcs_withKTR_cs_plots[[2]] |> AKI_theme()
+HF_SMCFCS  <- smcfcs_withKTR_cs_plots[[5]] |> HF_theme()
+MACE_SMCFCS  <- smcfcs_withKTR_cs_plots[[4]] |> MACE_theme()
+MACE_SMCFCS_zoomed <- smcfcs_withKTR_cs_plots[[4]] |> MACE_zoomed_theme()
+
+# Overlay the zoomed-in plot on the main plot
+MACE_combined_SMCFCS <- MACE_SMCFCS +
+   annotation_custom(ggplotGrob(MACE_SMCFCS_zoomed),
+                     xmin = 15, xmax = 130, ymin = 1, ymax = 6.5)
+
+# Create the panel
+SMCFCS <- (death_SMCFCS + KFRT_SMCFCS + AKI_SMCFCS + HF_SMCFCS + MACE_combined_SMCFCS + plot_spacer()) +
+   plot_layout(ncol = 2, nrow = 3,
+               guides = "collect") +
+   plot_annotation(tag_levels = "A") &
+   theme(legend.position = "bottom",
+         legend.text = element_text(size = 8),
+         legend.key.size = unit(0.2, "cm"))
+
+save_for_manuscript("FigureS9_SMC-FCS", SMCFCS, height = 164*1.5)
+
+
+
+# #------------------------------- Figure S12 CCA --------------------------------
+
+# # GFR distribution in complete cases
+# gfr_distrib_CCA <- data |>
+#    filter(is.na(log_uacr_enriched) == FALSE, is.na(bmi) == FALSE) |>
+#    select(mgfr, ckd_epi_2021_cr, ckd_epi_2012_cys, ckd_epi_2021_cr_cys) |>
+#    pivot_longer(cols = everything(), names_to = "Equation", values_to = "GFR") |>
+#    mutate(Equation = factor(Equation, levels = c("mgfr", "ckd_epi_2021_cr", "ckd_epi_2012_cys", "ckd_epi_2021_cr_cys")),
+#           linesize = if_else(Equation == "mgfr", 1, 0))
+
+# .palette <- palette_okabe_ito(c(1,3,5,7))
+
+# .custom_labels <- c(expression("mGFR"),
+#                     expression(paste("eGFR"[cr])),
+#                     expression(paste("eGFR"[cys])),
+#                     expression(paste("eGFR"[cr-cys])))
+
+# gfr_distrib_CCA_plot <- gfr_distrib_CCA |>
+#    ggplot(aes(x = GFR, color = Equation, fill = Equation, linewidth = factor(linesize))) +
+#    geom_density(alpha = 0.2, position="identity") +
+#    scale_color_manual(name = NULL, values = .palette, labels = .custom_labels) +
+#    scale_fill_manual(name = NULL, values = .palette, labels = .custom_labels) +
+#    guides(linewidth = "none", color = "none", fill = "none") +
+#    scale_linewidth_manual(values = c(0.5, 1)) +
+#    scale_x_continuous(breaks = c(15, 30, 45, 60, 90, 120), limits = c(15,120), minor_breaks = c(75, 105)) +
+#    labs(title = "Glomerular filtration rate distribution",
+#         x = expression("Glomerular filtration rate, mL/min/1.73m"^2)) +
+#    ylim(c(0,0.0175)) +
+#    theme_classic() +
+#    theme(plot.title = element_text(size = 10),
+#          aspect.ratio = 0.8,
+#          axis.title = element_text(size = 9),
+#          legend.position = "none",
+#          legend.justification = c(0.1,1),
+#          legend.text = element_text(size = 8),
+#          legend.key.size = unit(0.2, "cm"),
+#          legend.spacing = unit(0.1, "cm"))
+
+# ## GFR vs outcomes
+# load(file = here::here("output","r_objects","gfr-vs-outcomes_CCA_withKTR_cs_plots.rda"))
+
+# CCA_uncens_kfrt
+
+# CCA_death <- CCA_uncens_kfrt$`All-cause Death` |> death_theme(ylim = c(0.5,3.3))
+
+# CCA_KFRT <- CCA_uncens_kfrt$KFRT |> KFRT_theme(cutoff = 10^-23, breaks = c(10^-23, 10^-20, 10^-15, 10^-10, 10^-5, 10^-2,
+#                                                                            10^2, 10^5, 10^10))
+
+# ylim_CCA <- c(0.1,6.2)
+# breaks_CCA <- 1:6
+
+# CCA_AKI <- CCA_uncens_kfrt$AKI |> AKI_theme(ylim = ylim_CCA, breaks = breaks_CCA)
+
+# CCA_HF <- CCA_uncens_kfrt$HF |> HF_theme(ylim = ylim_CCA, breaks = breaks_CCA)
+
+# CCA_MACE <- CCA_uncens_kfrt$MACE |> MACE_theme(ylim = ylim_CCA, breaks = breaks_CCA)
+
+# # Create the zoomed-in inset plot (excluding legend & annotation)
+# CCA_MACE_zoomed <- CCA_MACE |> MACE_zoomed_theme(ylim = c(0.15,4.5), breaks = 1:4)
+
+# # Overlay the zoomed-in plot on the main plot
+# complete_CCA_MACE <- CCA_MACE +
+#    annotation_custom(ggplotGrob(CCA_MACE_zoomed),
+#                      xmin = 15, xmax = 130, ymin = 1.1, ymax = 7)
+
+# panel_CCA <- (gfr_distrib_CCA_plot + CCA_death + CCA_KFRT + CCA_AKI + CCA_HF + complete_CCA_MACE) +
+#    plot_layout(ncol = 2, nrow = 3, guides = "collect") +
+#    plot_annotation(tag_levels = 'A') &
+#    theme(legend.position = "bottom",
+#          legend.text = element_text(size = 8),
+#          legend.key.size = unit(0.2, "cm"))
+
+# save_for_manuscript("FigureS12_CCA", panel_CCA, height = 164*1.5, width = 164)
+
+
+
+################################################################################
+###                           SUPPLEMENTARY TABLES                           ###
+################################################################################
+
+#----------------------- Table S1: Covariates definition -----------------------
+
+Comorb <- tribble(
+   ~ Variables, ~'Codes (ICD-10 or ATC)',
+   "Myocardial infarction",   "I200, I21-I22",
+   # "Other ischemic heart disease",   "I201, I208, I209, I24, I25",
+   "Hypertension", "I10-I15",
+   "Heart failure", "I110, I130, I132, I42, I43, I50",
+   "Stroke", "I60-I64, I693, I698, I694",
+   "Peripheral artery disease", "I70-I73",
+   "Atrial fibrillation", "I48",
+   "Diabetes", "E10-E14",
+   "COPD", "J44",
+   "Cancer", "C00-C26, C30-C34, C37-C41, C43-C58, C60-C76, C81-C96, C97",
+   "Liver disease", "B18, I850, I859, I982, K70-K77",
+   "Kidney donor", "Z524",
+   "Kidney transplant recipient", "Registered kidney transplantation from the Swedish Renal Registry",
+   "Acute kidney injury", "N17"
+) |> mutate(type = "Comorbidities")
+
+Meds <- tribble(
+   ~ Variables, ~'Codes (ICD-10 or ATC)',
+   "Anti-hypertensive medication", "C07, C08, C03, C09A, C09B, C09C, C09D",
+   "Beta-blockers", "C07",
+   "Calcium channel blockers", "C08",
+   "Diuretics", "C03",
+   "Renin-angiotensin system inhibitors", "C09A, C09B, C09C, C09D",
+   "Lipid-lowering agents", "C10",
+   "NSAIDs", "M01A",
+   "Glucocorticosteroids", "H02AB, H0200, H0201"
+
+) |> mutate(type = "Medications")
+
+Outcomes <- tribble(
+   ~ Variables, ~'Codes (ICD-10 or ATC)',
+   "All-cause mortality", "Death in the Swedish Causes of Death Registry",
+   "Cardiovascular mortality", "ICD-10 code of the I family as main cause of death",
+   "Kidney failure with replacement therapy", "Registered start of maintenance dialysis or kidney transplantation from the Swedish Renal Registry",
+   "Major adverse cardiovascular event", "Hospitalization with I21, I22, I61, I63 or I64 codes in any position, or cardiovascular death",
+   "Heart failure", "Hospitalization with I110, I130, I132, I50 codes in any position",
+   "AKI", "Hospitalization with N17 code in any position"
+) |> mutate(type = "Outcomes")
+
+rbind(Comorb, Meds, Outcomes) |>
+   group_by(type) |>
+   gt(rowname_col = ) |>
+   tab_style(style = cell_text(weight = "bold"),
+             locations = cells_row_groups()) |>
+   gtsave(filename = "TableS1_covariates_definitions.docx",
+          path = here::here("output","manuscript"))
+
+#---------------------------------- Table S2 -----------------------------------
+# Complete versus incomplete cases
+
+load(file = here::here("output", "r_objects", "CCA_description_tbl.rda"))
+
+complete_cases_table1 |>
+  as_gt() |>
+  table_to_docx("TableS2_complete-versus-incomplete_cases")
+
+#---------------------------------- Table S3 -----------------------------------
+
+data |>
+  create_gfr_strata("ckd_epi_2021_cr") |>
+  make_table1("ckd_epi_2021_cr_strat", "eGFR<sub>cr</sub>") |>
+  table_to_docx("TableS3_baseline-characteristics-eGFRcr")
+
+
+#---------------------------------- Table S4 -----------------------------------
+
+data |>
+  create_gfr_strata("ckd_epi_2012_cys") |>
+  make_table1("ckd_epi_2012_cys_strat", "eGFR<sub>cys</sub>") |>
+  table_to_docx("TableS4_baseline-characteristics-eGFRcys")
+
+
+#---------------------------------- Table S5 -----------------------------------
+
+data |>
+  create_gfr_strata("ckd_epi_2021_cr_cys") |>
+  make_table1("ckd_epi_2021_cr_cys_strat", "eGFR<sub>cr-cys</sub>") |>
+  table_to_docx("TableS5_baseline-characteristics-eGFRcr-cys")
+
+
+#---------------------------------- Table S6 -----------------------------------
+# EKFC key HRs
+
+load(file = here::here("output","r_objects","EKFC_tbl.rda"))
+
+EKFC_tbl |>
+   rename(`Heart Failure` = `Heart failure`) |>
+   prepare_table() |>
+   make_gt_results() |>
+   table_to_docx("TableS6_EKFC")
+
+#---------------------------------- Table S7 -----------------------------------
+# CKD-EPI 2009-12
+
+load(file = here::here("output","r_objects","CKDEPI2009_tbl.rda"))
+
+CKDEPI2009_tbl |>
+   prepare_table() |>
+   make_gt_results() |>
+   table_to_docx("TableS7_CKDEPI2009-12")
+
+#---------------------------------- Table S8 -----------------------------------
+# Without UACR enrichment
+
+load(file = here::here("output","r_objects","MICE_wo-UACR-conversion_tbl.rda"))
+
+wo_UACR_tbl |>
+   prepare_table() |>
+   make_gt_results() |>
+   table_to_docx("TableS8_wo-UACR-enrich")
+
+#---------------------------------- Table S9 -----------------------------------
+# Excluding KTR
+
+data |>
+  filter(transplant == 0) |>
+  dplyr::summarize(
+     "At risk - death" = n(), 
+     "At risk - kidney failure" = n(), 
+     "At risk - MACE" = sum(history_stroke == 0 & history_mi == 0), 
+     "At risk - HF" = sum(hf == 0), 
+     "At risk - AKI" = sum(history_aki == 0), 
+     "No. events - death" = sum(death == 1), 
+     "No. events - kidney failure" = sum(rrt == 1), 
+     "No. events - MACE" = sum(history_stroke == 0 & history_mi == 0 & MACE_wo_HF), 
+     "No. events - HF" = sum(hf == 0 & heart_failure), 
+     "No. events - AKI" = sum(history_aki == 0 & aki),
+  )%>%
+   pivot_longer(
+      cols = starts_with("At risk") | starts_with("No. events"),
+      names_to = c(".value", "outcome"),
+      names_pattern = "^(At risk|No\\. events) - (.*)$"
+   ) %>%
+   rename(
+      nb_at_risk = `At risk`,
+      nb_events = `No. events`
+   )
+
+load(file = here::here("output","r_objects","woKTR_tbl.rda"))
+
+woKTR_tbl |>
+   prepare_table() |>
+   make_gt_results() |>
+   table_to_docx("TableS9_wo-KTR")
+
+
+#---------------------------------- Table S10 -----------------------------------
+# Excluding HF
+
+data |>
+  filter(hf == 0) |>
+  dplyr::summarize(
+    nb = n(),
+    death = sum(death),
+    kfrt = sum(rrt),
+    aki = sum(aki),
+    hf = sum(heart_failure),
+    mace = sum(MACE_wo_HF)
+  ) 
+load(file = here::here("output", "r_objects", "excl_hf_tbl.rda"))
+
+excl_hf_tbl |>
+   prepare_table() |>
+   make_gt_results() |>
+   table_to_docx("TableS10_wo-hf")
+
+
+#---------------------------------- Table S11 -----------------------------------
+# SMC-FCS
+
+load(file = here::here("output","r_objects","gfr-vs-outcomes_smcfcs_withKTR_cs_tbl.rda"))
+
+smcfcs_withKTR_cs_tbl %>%
+   prepare_table() |>
+   make_gt_results() |>
+   table_to_docx("TableS9_SMC-FCS")
+
+
+#------------------------------ Table S12: CCA ----------------------------------
+
+load(file = here::here("output","r_objects","gfr-vs-outcomes_CCA_withKTR_cs_tbl.rda"))
+
+CCA_HRs %>%
+   rename("Heart Failure" = "Heart failure") |>
+   prepare_table() |>
+   make_gt_results() |>
+   table_to_docx("TableS12_CCA")

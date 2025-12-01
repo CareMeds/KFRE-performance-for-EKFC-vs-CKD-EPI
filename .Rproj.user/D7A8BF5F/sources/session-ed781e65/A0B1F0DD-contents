@@ -1,0 +1,570 @@
+################################################################################
+# FILENAME: 5. Validation.R
+# PROJECT: KFRE Performance with non-CKD-EPI equations
+# PURPOSE: Validate KF predictions
+# AUTHOR: Malou Magnani
+# CREATED: 2025-02
+# UPDATED:
+# - 2025-10-22 (Antoine Creon)
+
+# R VERSION: 4.5
+################################################################################
+# remove history
+rm(list = ls(all.names = TRUE))
+
+# load libraries
+library(survival) # time-to-event analyses
+library(patchwork) # combine plots
+library(here) # combine plots
+library(purrr) # combine plots
+library(dplyr) # combine plots
+library(boot)
+library(parallel)
+library(stringr)
+
+
+# set seed for reproducibility
+set.seed(27)
+
+# load data sets
+load(here("Data", "clean", "cohort_predictions.RData"))
+
+# load functions
+source(here("Code", "Functions for analyses.R"))
+
+## Prepapre analyses -----------------------------------------------------------
+
+equations <- c(
+  "ckd_epi_2009_cr",
+  "ckd_epi_2012_cys",
+  "ckd_epi_2012_cr_cys",
+  "ekfc_cr",
+  "ekfc_cys",
+  "ekfc_cr_cys",
+  "revised_lm_cr",
+  "revised_lm_cys",
+  "revised_lm_cr_cys"
+)
+
+equation_names <- c(
+  "CKD-EPI[cr]~2009",
+  "CKD-EPI[cys]~2012",
+  "CKD-EPI[cr-cys]~2012",
+  "EKFC[cr]",
+  "EKFC[cys]",
+  "EKFC[cr-cys]",
+  "R-LM[cr]",
+  "R-LM[cys]",
+  "R-LM[cr-cys]"
+)
+
+horizons <- c(2, 5)
+
+# Make a table of results
+results <- tidyr::crossing(equations, horizons)
+
+# Define bootstrap parameters
+B <- 500 # nb of bootstrap samples
+seed <- 456789 # seed
+cl <- makeCluster(parallel::detectCores() - 1)
+ncpus <- parallel::detectCores() - 1
+
+
+################################################################################
+# For each equation, calculate performance measures ############################
+################################################################################
+
+## C-statistic (modified by Wolbers)--------------------------------------------
+
+c_stat_estimate <- map2(
+  .x = results$equations,
+  .y = results$horizons,
+  ~ c_statistic_estimate(cohort, .x, .y)
+) |>
+  unlist()
+
+c_stat_CI <- map2(
+  .x = results$equations,
+  .y = results$horizons,
+  ~ c_statistic_CI(cohort, .x, .y, B = B, seed = seed)
+) |>
+  bind_rows()
+
+# Add them to the results table
+results <- cbind(results, c_stat_estimate, c_stat_CI)
+
+# Save the results tables
+# save(results, file = here("Data", "analyses", "res_table.rda"))
+
+## Calibration intercept and slope ---------------------------------------------
+# load(file = here("Data", "analyses", "res_table.rda"))
+
+# Compute calibration intercept, slope and their CI for each combination of equation and horizon
+calibration <- map2(
+  .x = results$equations,
+  .y = results$horizons,
+  ~ cal_int_slope(data = cohort, equation = .x, horizon = .y)
+) |>
+  list_rbind()
+
+# Add calibration to the results table
+results <- cbind(results, calibration)
+
+# Save the results tables
+# save(results, file = here("Data", "analyses", "res_table.rda"))
+
+## O/E ratio -------------------------------------------------------------------
+load(file = here("Data", "analyses", "res_table.rda"))
+
+# Put CIF in function, change output to mimick the two above
+
+OE <- map2(
+  .x = results$equations,
+  .y = results$horizons,
+  ~ oe_ratio(equation = .x, horizon = .y, bootstrap = TRUE, B = B, seed = seed)
+) |>
+  list_rbind()
+
+results <- cbind(results, OE)
+
+
+# Save the results tables
+# save(results, file = here("Data", "analyses", "res_table.rda"))
+
+## Brier scores ----------------------------------------------------------------
+# brier score
+brier <- brier_scores(
+  data = cohort,
+  equation = "ckd_epi_2009_cr",
+  horizon = 2,
+  bootstrap = FALSE,
+  B = 500,
+  seed = seed
+)
+
+data = cohort
+equation = "ckd_epi_2009_cr"
+horizon = 5
+bootstrap = FALSE
+B = 500
+seed = seed
+
+pred_risks <- eval(parse(
+  text = paste0("cohort$risk_", horizon, "y_", equation)
+))
+
+data$time_to_event <- eval(parse(
+  text = paste0("data$time_to_event_", horizon, "y")
+))
+data$outcome <- eval(parse(text = paste0("data$outcome_", horizon, "y")))
+
+# Original Brier score calculation
+brier <- riskRegression::Score(
+  list(pred_risks),
+  formula = Hist(time_to_event, outcome) ~ 1,
+  cens.method = "pseudo",
+  data = data,
+  times = 1 * 365.25,
+  cause = 1,
+  conf.int = TRUE,
+  metrics = "brier",
+  summary = "ipa"
+)
+
+# try with a non-informative model with survival
+str(pred_risks)
+summary(brier)
+
+# Extract values for the numeric model only
+numeric_model <- brier$Brier$score[model == "numeric"]
+
+# Store original values
+brier_score <- numeric_model$Brier
+ipa_score <- numeric_model$IPA
+
+# ??
+# numeric_model <- brier$IPA
+# ? lower and upper given directly, why bootstrap CI ?
+
+################################################################################
+# Compute comparison metrics between equations #################################
+################################################################################
+# why bootstrap brier?
+# Add AUC?
+
+delta_brier_2y <- delta_brier(
+  cohort,
+  equations,
+  list(c(1, 4, 7), c(2, 5, 8), c(3, 6, 9)),
+  horizon = 2
+)
+delta_brier_5y <- delta_brier(
+  cohort,
+  equations,
+  list(c(1, 4, 7), c(2, 5, 8), c(3, 6, 9)),
+  horizon = 5
+)
+
+delta_brier <- rbind(delta_brier_2y, delta_brier_5y) %>%
+  rename(horizon = times) %>%
+  mutate(horizon = horizon / 365.25)
+
+save(delta_brier, file = here("Data", "analyses", "delta_brier.rda"))
+
+
+################################################################################
+# Combined calibration plot for all models for both horizons ###################
+################################################################################
+
+# Confidence int around calibration ?
+# Distribution of predicted risks
+
+calibration_plot_tbl <- map2(
+  .x = results$equations,
+  .y = results$horizons,
+  ~ calibration_plot(data = cohort, equation = .x, horizon = .y)
+) |>
+  list_rbind()
+
+calibration_plot_tbl <- calibration_plot_tbl %>%
+  mutate(
+    color_group = paste0(model, "_", horizon),
+    plot_group = case_when(
+      model %in%
+        c("ckd_epi_2009_cr", "ekfc_cr", "revised_lm_cr") ~ "Creatinine",
+      model %in%
+        c("ckd_epi_2012_cys", "ekfc_cys", "revised_lm_cys") ~ "Cystatin C",
+      model %in%
+        c(
+          "ckd_epi_2012_cr_cys",
+          "ekfc_cr_cys",
+          "revised_lm_cr_cys"
+        ) ~ "Creatinine and Cystatin C",
+    )
+  )
+
+save(
+  calibration_plot_tbl,
+  file = here("Data", "analyses", "calibration_plots_tbl.rda")
+)
+# load(file = here("Data", "analyses", "calibration_plots_tbl.rda"))
+
+################################################################################
+### Risk distribution plots ####################################################
+################################################################################
+equation_order_2y <- paste0("risk_2y_", equations)
+
+## 2 years ---------------------------------------------------------------------
+
+# long format
+cohort_risk_2y_long <- cohort |>
+  dplyr::select(
+    lopnr,
+    all_of(equation_order_2y)
+  ) |>
+  tidyr::pivot_longer(
+    cols = starts_with("risk_"),
+    names_to = "Equation",
+    values_to = "Risk"
+  ) |>
+  dplyr::mutate(
+    Equation = factor(
+      Equation,
+      levels = equation_order_2y,
+      labels = equation_names
+    )
+  )
+
+save(
+  cohort_risk_2y_long,
+  equation_order_2y,
+  file = here("Data", "analyses", "risk_2y_long.rda")
+)
+
+## 5 years ---------------------------------------------------------------------
+
+equation_order_5y <- paste0("risk_5y_", equations)
+
+# long format
+cohort_risk_5y_long <- cohort |>
+  dplyr::select(
+    lopnr,
+    all_of(equation_order_5y)
+  ) |>
+  tidyr::pivot_longer(
+    cols = starts_with("risk_"),
+    names_to = "Equation",
+    values_to = "Risk"
+  ) |>
+  dplyr::mutate(
+    Equation = factor(
+      Equation,
+      levels = equation_order_5y,
+      labels = equation_names
+    )
+  )
+
+save(
+  cohort_risk_5y_long,
+  equation_order_5y,
+  file = here("Data", "analyses", "risk_5y_long.rda")
+)
+
+
+################################################################################
+# Risk differences #############################################################
+################################################################################
+
+## 2 years ---------------------------------------------------------------------
+
+cohort_risk_diff_2y_long <- cohort_risk_2y_long |>
+  filter(!str_detect(Equation, "R-LM")) %>%
+  mutate(
+    method = case_when(
+      str_detect(Equation, "CKD-EPI") ~ "CKD-EPI",
+      str_detect(Equation, "EKFC") ~ "EKFC",
+      TRUE ~ NA_character_
+    ),
+    biomarker = case_when(
+      str_detect(Equation, "cr-cys\\]") ~ "eGFR[cr-cys]",
+      str_detect(Equation, "cr\\]") ~ "eGFR[cr]",
+      str_detect(Equation, "cys\\]") ~ "eGFR[cys]",
+      TRUE ~ NA_character_
+    ),
+    biomarker = factor(
+      biomarker,
+      levels = c("eGFR[cr]", "eGFR[cys]", "eGFR[cr-cys]")
+    )
+  ) %>%
+  select(lopnr, method, biomarker, Risk) %>%
+  tidyr::pivot_wider(
+    names_from = method,
+    values_from = Risk
+  ) %>%
+  mutate(
+    risk_diff = EKFC - `CKD-EPI`
+  )
+
+save(
+  cohort_risk_diff_2y_long,
+  file = here("Data", "analyses", "riskdiff_2y.rda")
+)
+
+## 5 years ---------------------------------------------------------------------
+
+cohort_risk_diff_5y_long <- cohort_risk_5y_long |>
+  filter(!str_detect(Equation, "R-LM")) %>%
+  mutate(
+    method = case_when(
+      str_detect(Equation, "CKD-EPI") ~ "CKD-EPI",
+      str_detect(Equation, "EKFC") ~ "EKFC",
+      TRUE ~ NA_character_
+    ),
+    biomarker = case_when(
+      str_detect(Equation, "cr-cys\\]") ~ "eGFR[cr-cys]",
+      str_detect(Equation, "cr\\]") ~ "eGFR[cr]",
+      str_detect(Equation, "cys\\]") ~ "eGFR[cys]",
+      TRUE ~ NA_character_
+    ),
+    biomarker = factor(
+      biomarker,
+      levels = c("eGFR[cr]", "eGFR[cys]", "eGFR[cr-cys]")
+    )
+  ) %>%
+  select(lopnr, method, biomarker, Risk) %>%
+  tidyr::pivot_wider(
+    names_from = method,
+    values_from = Risk
+  ) %>%
+  mutate(
+    risk_diff = EKFC - `CKD-EPI`
+  )
+
+save(
+  cohort_risk_diff_5y_long,
+  file = here("Data", "analyses", "riskdiff_5y.rda")
+)
+
+################################################################################
+### eGFR distributions #########################################################
+################################################################################
+# long format
+
+cohort_egfr_long <- cohort |>
+  select(lopnr, all_of(equations[!str_detect(equations, "revised")])) |>
+  tidyr::pivot_longer(
+    cols = all_of(equations[!str_detect(equations, "revised")]),
+    names_to = "model",
+    values_to = "eGFR"
+  ) |>
+  dplyr::mutate(
+    method = dplyr::case_when(
+      str_detect(model, "^ckd_epi") ~ "CKD-EPI",
+      str_detect(model, "^ekfc") ~ "EKFC",
+      TRUE ~ NA_character_
+    ),
+    biomarker = dplyr::case_when(
+      str_detect(model, "cr_cys") ~ "eGFR[cr-cys]",
+      str_detect(model, "_cr") & !str_detect(model, "cr_cys") ~ "eGFR[cr]",
+      str_detect(model, "_cys") & !str_detect(model, "cr_cys") ~ "eGFR[cys]",
+      TRUE ~ NA_character_
+    ),
+    biomarker = factor(
+      biomarker,
+      levels = c("eGFR[cr]", "eGFR[cys]", "eGFR[cr-cys]")
+    )
+  ) |>
+  dplyr::select(lopnr, method, biomarker, eGFR)
+
+save(
+  cohort_egfr_long,
+  file = here("Data", "analyses", "cohort_egfr_long.rda")
+)
+
+################################################################################
+### Reclassification tables ####################################################
+################################################################################
+# 2-y risk
+risk_2y <- paste0("risk_2y_", equations)
+# 5-y risk
+risk_5y <- paste0("risk_5y_", equations)
+
+# 2y eGFR <30: filter pop and categorize risks
+cohort_risk_2y_reclas <- cohort |>
+  dplyr::filter(ckd_epi_2009_cr >= 10 & ckd_epi_2009_cr <= 30) |>
+  mutate(across(
+    all_of(risk_2y),
+    ~ ifelse(.x > 0.40, ">40%", "≤40%"),
+    .names = "cat_{.col}"
+  ))
+
+# 5y eGFR 30-60: filter pop and categorize risks
+cohort_risk_5y_reclas <- cohort |>
+  dplyr::filter(ckd_epi_2009_cr >= 30 & ckd_epi_2009_cr <= 60) |>
+  mutate(across(
+    all_of(risk_5y),
+    ~ case_when(
+      .x < 0.03 ~ "<3%",
+      .x >= 0.03 & .x <= 0.05 ~ "3% - 5%",
+      .x > 0.05 ~ ">5%"
+    ),
+    .names = "cat_{.col}"
+  ))
+
+
+# Split data based on outcome
+cohort_risk_2y_reclas_cases <- subset(cohort_risk_2y_reclas, outcome_2y == 1)
+cohort_risk_2y_reclas_control <- subset(
+  cohort_risk_2y_reclas,
+  outcome_2y %in% c(0, 2)
+)
+cohort_risk_5y_reclas_cases <- subset(cohort_risk_5y_reclas, outcome_5y == 1)
+cohort_risk_5y_reclas_control <- subset(
+  cohort_risk_5y_reclas,
+  outcome_5y %in% c(0, 2)
+)
+
+# Make two reclassification tables for 2-year and 5-year predictions
+table_2y <- c()
+table_5y <- c()
+
+table_2y_all <- generate_reclass_table_2y(
+  data = cohort_risk_2y_reclas,
+  risk_categories = eval(parse(
+    text = paste0("cohort_risk_2y_reclas$cat_risk_2y_", equation)
+  )),
+  title = paste("Reclassification Table all patients after 2 years", equation)
+)
+
+for (equation in equations[-1]) {
+  # for all patients
+  table_2y_all <- generate_reclass_table_2y(
+    data = cohort_risk_2y_reclas,
+    risk_categories = eval(parse(
+      text = paste0("cohort_risk_2y_reclas$cat_risk_2y_", equation)
+    )),
+    title = paste("Reclassification Table all patients after 2 years", equation)
+  )
+  table_5y_all <- generate_reclass_table_5y(
+    data = cohort_risk_5y_reclas,
+    risk_categories = eval(parse(
+      text = paste0("cohort_risk_5y_reclas$cat_risk_5y_", equation)
+    )),
+    title = paste("Reclassification Table all patients after 5 years", equation)
+  )
+
+  # for patients with the outcome
+  table_2y_cases <- generate_reclass_table_2y(
+    data = cohort_risk_2y_reclas_cases,
+    risk_categories = eval(parse(
+      text = paste0("cohort_risk_2y_reclas_cases$cat_risk_2y_", equation)
+    )),
+    title = paste(
+      "Reclassification Table patients with KFRT after 2 years",
+      equation
+    )
+  )
+  table_5y_cases <- generate_reclass_table_5y(
+    data = cohort_risk_5y_reclas_cases,
+    risk_categories = eval(parse(
+      text = paste0("cohort_risk_5y_reclas_cases$cat_risk_5y_", equation)
+    )),
+    title = paste(
+      "Reclassification Table patients with KFRT after 5 years",
+      equation
+    )
+  )
+
+  # for patients without the outcome
+  table_2y_control <- generate_reclass_table_2y(
+    data = cohort_risk_2y_reclas_control,
+    risk_categories = eval(parse(
+      text = paste0("cohort_risk_2y_reclas_control$cat_risk_2y_", equation)
+    )),
+    title = paste(
+      "Reclassification Table patients without KFRT after 2 years",
+      equation
+    )
+  )
+  table_5y_control <- generate_reclass_table_5y(
+    data = cohort_risk_5y_reclas_control,
+    risk_categories = eval(parse(
+      text = paste0("cohort_risk_5y_reclas_control$cat_risk_5y_", equation)
+    )),
+    title = paste(
+      "Reclassification Table patients without KFRT after 5 years",
+      equation
+    )
+  )
+
+  # final table
+  table_2y <- cbind(
+    table_2y,
+    rbind(
+      table_2y_all$table,
+      rep("", 2),
+      table_2y_cases$table,
+      rep("", 2),
+      table_2y_control$table
+    )
+  )
+  table_5y <- cbind(
+    table_5y,
+    rbind(
+      table_5y_all$table,
+      rep("", 2),
+      table_5y_cases$table,
+      rep("", 2),
+      table_5y_control$table
+    )
+  )
+}
+# write to Excel
+openxlsx::write.xlsx(
+  table_2y,
+  file = here("Output", "Reclassification 2-year predictions.xlsx")
+)
+openxlsx::write.xlsx(
+  table_5y,
+  file = here("Output", "Reclassification 5-year predictions.xlsx")
+)

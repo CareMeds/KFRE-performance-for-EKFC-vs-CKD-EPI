@@ -1,0 +1,61 @@
+
+calibration_plot_tbl %>%
+  filter(!model %in% c("revised_lm_cr", "revised_lm_cys", "revised_lm_cr_cys")) %>%
+  filter(model == "ckd_epi_2012_cys",
+         horizon == 2) %>% 
+  # mutate(
+  #   # Label horizons nicely
+  #   horizon = factor(horizon,
+  #                    levels = c(2, 5),
+  #                    labels = c("2-year KFRE", "5-year KFRE")
+  #   ),
+  #   # Order columns manually
+  #   plot_group = factor(plot_group,
+  #                       levels = c("Creatinine", "Cystatin C", "Creatinine and Cystatin C"),
+  #                       labels = c("bold(eGFR[cr])", "bold(eGFR[cys])", "bold(eGFR[cr~'-'~cys])") 
+  #   ),
+  #   # Extract equation family for coloring
+  #   eq_family = case_when(
+  #     grepl("ekfc", model, ignore.case = TRUE) ~ "EKFC",
+  #     grepl("ckd_epi", model, ignore.case = TRUE) ~ "CKD-EPI",
+  #     TRUE ~ "Other"
+  #   )
+  # ) %>%
+  ggplot(aes(x = risk, y = observed)) +
+  geom_line(linewidth = 0.8, alpha = 0.9) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray40") +
+  scale_y_continuous(breaks = seq(0, 1, 0.25), limits = c(0, 1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.25), limits = c(0, 1)) +
+  # scale_color_manual(
+  #   name = "Equation family",
+  #   values = c("EKFC" = "#0072B2", "CKD-EPI" = "#009E73")
+  # ) +
+  labs(
+    x = "Predicted risk",
+    y = "Observed risk"
+  ) +
+  # facet_grid(rows = vars(horizon), 
+  #            cols = vars(plot_group), 
+  #            switch = "y",     
+  #            labeller = labeller(plot_group = label_parsed)  # <- enables subscript parsing
+  # ) +
+  theme_bw() +
+  theme(
+    aspect.ratio = 1,
+    legend.position = "bottom",
+    legend.title = element_text(size = 10, face = "bold"),
+    # legend.text = element_text(size = 9),
+    legend.key.size = unit(0.5, "cm"),
+    # axis.title = element_text(face="bold"),
+    panel.spacing = unit(1, "lines"),
+    strip.placement = "outside",
+    
+    # clean black text on white facet strips
+    strip.background = element_rect(fill = "white", color = NA),
+    strip.text.x = element_text(size = 9, color = "black"),
+    strip.text.y.left = element_text(size = 9, color = "black", face = "bold"),
+    
+    # remove small background grid
+    # panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  )
