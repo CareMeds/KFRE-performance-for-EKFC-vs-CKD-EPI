@@ -21,7 +21,6 @@ This repository contains the analysis code for the study *"Performance and clini
 │   ├── 3. Outcome derivation.R      # Define kidney failure and death outcomes
 │   ├── 4. Predictions.R             # Calculate KFRE predictions using different eGFR equations
 │   ├── 5. Validation.R              # Model validation (discrimination, calibration, Brier scores)
-│   ├── 6. Figures and Tables.R      # Generate manuscript figures and tables
 │   ├── Functions eGFR equations.R   # eGFR calculation functions (CKD-EPI, EKFC)
 │   ├── Functions for analyses.R     # Helper functions for statistical analyses
 └── README.md
@@ -36,18 +35,19 @@ This repository contains the analysis code for the study *"Performance and clini
 
 | Package | Version | Purpose |
 |---------|---------|---------|
+| here | 1.0.2 | Project-relative paths |
 | dplyr | 1.1.4 | Data manipulation |
 | tidyr | 1.3.1 | Data reshaping |
 | purrr | 1.1.0 | Functional programming |
 | stringr | 1.5.2 | String manipulation |
 | forcats | 1.0.1 | Factor handling |
 | survival | 3.8.3 | Survival analysis |
+| cmprsk | 2.2.12 | Competing risks analysis |
 | riskRegression | 2025.9.17 | Risk prediction models |
 | timeROC | 0.4 | Time-dependent ROC curves |
-| cmprsk | 2.2.12 | Competing risks analysis |
-| here | 1.0.2 | Project-relative paths |
-| readxl | 1.4.5 | Excel file import |
+| dcurves | 0.5.1 | Decision curve analysis |
 | scales | 1.4.0 | Axis scaling |
+
 
 ## Usage
 
@@ -72,10 +72,6 @@ This work is licensed under a [Creative Commons Attribution 4.0 International Li
 If you use this code, please cite:
 
 > XXX (ADD CITATION ONCE PUBLISHED)
-
-## Contact
-
-For questions regarding the code or analysis, please open an issue in this repository.
 
 ## Acknowledgments
 
