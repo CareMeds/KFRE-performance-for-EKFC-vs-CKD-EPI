@@ -125,25 +125,49 @@ save(results, file = here("Data", "analyses", "res_table.rda"))
 # Compute comparison metrics between equations #################################
 ################################################################################
 
-delta_brier_2y <- delta_brier(
-  cohort,
-  equations,
-  list(c(1, 4, 7), c(2, 5, 8), c(3, 6, 9)),
-  horizon = 2
+delta_brier_tbl <- tidyr::crossing(
+  biomarker = c("eGFR[cr]", "eGFR[cys]", "eGFR[cr-cys]"),
+  horizon = c(2, 5)
+) |>
+  mutate(
+    biomarker = factor(
+      biomarker,
+      levels = c("eGFR[cr]", "eGFR[cys]", "eGFR[cr-cys]")
+    )
+  ) |>
+  arrange(biomarker, horizon) |>
+  mutate(
+    equation_ref = case_when(
+      biomarker == "eGFR[cr]" ~ "ckd_epi_2009_cr",
+      biomarker == "eGFR[cys]" ~ "ckd_epi_2012_cys",
+      biomarker == "eGFR[cr-cys]" ~ "ckd_epi_2012_cr_cys"
+    ),
+    equation_test = case_when(
+      biomarker == "eGFR[cr]" ~ "ekfc_cr",
+      biomarker == "eGFR[cys]" ~ "ekfc_cys",
+      biomarker == "eGFR[cr-cys]" ~ "ekfc_cr_cys"
+    )
+  )
+
+delta_scaled_brier_res <- delta_brier_tbl %>%
+  pmap(
+    ~ delta_scaled_brier_boot(
+      data = cohort,
+      equation_ref = ..3,
+      equation_test = ..4,
+      horizon = ..2,
+      B = 500,
+      seed = 19920903
+    )
+  ) |>
+  bind_rows()
+
+delta_scaled_brier_res <- cbind(delta_brier_tbl, delta_scaled_brier_res)
+
+save(
+  delta_scaled_brier_res,
+  file = here("Data", "analyses", "delta_scaled_brier_res.rda")
 )
-
-delta_brier_5y <- delta_brier(
-  cohort,
-  equations,
-  list(c(1, 4, 7), c(2, 5, 8), c(3, 6, 9)),
-  horizon = 5
-)
-
-delta_brier <- rbind(delta_brier_2y, delta_brier_5y) %>%
-  rename(horizon = times) %>%
-  mutate(horizon = horizon / 365.25)
-
-save(delta_brier, file = here("Data", "analyses", "delta_brier.rda"))
 
 
 ################################################################################
@@ -303,8 +327,20 @@ equation_order_2y <- paste0("risk_2y_", equations)
 
 # long format
 cohort_risk_2y_long <- cohort |>
+  mutate(
+    KFRT = if_else(
+      outcome_2y == 1,
+      "KFRT",
+      "No KFRT"
+    ),
+    KFRT = factor(
+      KFRT,
+      levels = c("No KFRT", "KFRT")
+    )
+  ) |>
   dplyr::select(
     lopnr,
+    KFRT,
     all_of(equation_order_2y)
   ) |>
   tidyr::pivot_longer(
@@ -332,8 +368,20 @@ equation_order_5y <- paste0("risk_5y_", equations)
 
 # long format
 cohort_risk_5y_long <- cohort |>
+  mutate(
+    KFRT = if_else(
+      outcome_5y == 1,
+      "KFRT",
+      "No KFRT"
+    ),
+    KFRT = factor(
+      KFRT,
+      levels = c("No KFRT", "KFRT")
+    )
+  ) |>
   dplyr::select(
     lopnr,
+    KFRT,
     all_of(equation_order_5y)
   ) |>
   tidyr::pivot_longer(

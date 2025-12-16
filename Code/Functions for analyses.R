@@ -326,43 +326,93 @@ brier_scores <- function(
   ))
 }
 
-# Delta Brier ------------------------------------------------------------------
 
-delta_brier <- function(
+# Delta Scaled Brier with Bootstrap CI -----------------------------------------
+
+delta_scaled_brier_boot <- function(
   data,
-  equation_list,
-  contrast_list,
-  horizon
+  equation_ref,
+  equation_test,
+  horizon,
+  B = 1000,
+  seed = 123
 ) {
-  # extract outcome variables according to horizon
+  # Inner function for single calculation (used by boot)
+  calc_delta_ipa <- function(
+    data,
+    indices,
+    equation_ref,
+    equation_test,
+    horizon
+  ) {
+    # Resample data
+    d <- data[indices, , drop = FALSE]
 
-  parse_objects <- map(
-    equation_list,
-    ~ eval(parse(text = paste0("cohort$risk_", horizon, "y_", .x)))
-  ) |>
-    set_names(equation_list)
+    # Extract variable names
+    .pred_risks_ref <- paste0("risk_", horizon, "y_", equation_ref)
+    .pred_risks_test <- paste0("risk_", horizon, "y_", equation_test)
+    .tte <- paste0("time_to_event_", horizon, "y")
+    .outcome <- paste0("outcome_", horizon, "y")
 
-  data$time_to_event <- eval(parse(
-    text = paste0("cohort$time_to_event_", horizon, "y")
-  ))
-  data$outcome <- eval(parse(text = paste0("cohort$outcome_", horizon, "y")))
+    brier_formula <- as.formula(paste0("Hist(", .tte, ",", .outcome, ") ~ 1"))
 
-  # Original Brier score calculation
-  brier <- riskRegression::Score(
-    parse_objects,
-    formula = Hist(time_to_event, outcome) ~ 1,
-    cens.method = "pseudo",
+    # Reference IPA
+    brier_ref <- riskRegression::Score(
+      list("ref" = d[[.pred_risks_ref]]),
+      formula = brier_formula,
+      data = d,
+      times = horizon * 365.25,
+      cause = 1,
+      se.fit = FALSE,
+      metrics = "brier",
+      summary = "ipa",
+      contrast = FALSE
+    )
+    IPA_ref <- brier_ref$IPA$score[model == "ref", IPA]
+
+    # Test IPA
+    brier_test <- riskRegression::Score(
+      list("test" = d[[.pred_risks_test]]),
+      formula = brier_formula,
+      data = d,
+      times = horizon * 365.25,
+      cause = 1,
+      se.fit = FALSE,
+      metrics = "brier",
+      summary = "ipa",
+      contrast = FALSE
+    )
+    IPA_test <- brier_test$IPA$score[model == "test", IPA]
+
+    return(IPA_test - IPA_ref)
+  }
+
+  # Set seed
+  set.seed(seed)
+
+  # Run bootstrap
+  boot_results <- boot::boot(
     data = data,
-    times = horizon * 365.25,
-    cause = 1,
-    conf.int = TRUE,
-    metrics = "brier",
-    summary = "ipa",
-    contrasts = contrast_list
+    statistic = calc_delta_ipa,
+    R = B,
+    equation_ref = equation_ref,
+    equation_test = equation_test,
+    horizon = horizon
   )
 
-  brier$Brier$contrasts
+  # Get point estimate (original data)
+  delta_est <- boot_results$t0
+
+  # Get percentile CI
+  boot_ci <- boot::boot.ci(boot_results, type = "perc", conf = 0.95)
+
+  return(tibble(
+    delta_scaled_brier = delta_est,
+    lower = boot_ci$percent[4],
+    upper = boot_ci$percent[5]
+  ))
 }
+
 
 ################################################################################
 # Decision curve analysis ######################################################
