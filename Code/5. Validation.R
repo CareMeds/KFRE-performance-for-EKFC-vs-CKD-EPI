@@ -18,6 +18,7 @@ library(patchwork) # combine plots
 library(here) # combine plots
 library(purrr) # combine plots
 library(dplyr) # combine plots
+library(geepack)
 library(boot)
 library(parallel)
 library(stringr)

@@ -105,38 +105,51 @@ cal_int_slope <- function(data, equation, horizon) {
     metrics = "brier"
   )
 
-  cal_quant <- riskRegression::plotCalibration(
-    Score,
-    # use CIF in presence of competing risks
-    cens.method = "pseudo",
-    # divide risk in quantiles
-    method = "quantile",
-    # 10 quantiles
-    q = 10,
-    # do not plot
-    plot = FALSE
+  # Extract pseudo-values
+  pseudos <- data.frame(Score$Calibration$plotframe)
+
+  # add the cloglog risk estimates
+  pseudos <- pseudos |>
+    mutate(cll_pred = log(-log(1 - risk)))
+
+  # Fit model for calibration intercept
+  fit_cal_int <- geese(
+    pseudovalue ~ offset(cll_pred),
+    data = pseudos,
+    id = riskRegression_ID,
+    scale.fix = TRUE,
+    family = gaussian,
+    mean.link = "cloglog",
+    corstr = "independence",
+    jack = TRUE
   )
 
-  # Extract these 10 datapoints
-  cal_curve <- cbind(
-    cal_quant$plotFrames$`1`$Pred,
-    cal_quant$plotFrames$`1`$Obs
-  ) |>
-    as.data.frame() |>
-    # Rename the variables
-    dplyr::rename("Pred" = "V1", "Obs" = "V2")
+  # Fit model for calibration slope
+  fit_cal_slope <- geepack::geese(
+    pseudovalue ~ offset(cll_pred) + cll_pred,
+    data = pseudos,
+    id = riskRegression_ID,
+    scale.fix = TRUE,
+    family = gaussian,
+    mean.link = "cloglog",
+    corstr = "independence",
+    jack = TRUE
+  )
 
-  cal_model <- stats::lm(Obs ~ Pred, data = cal_curve)
+  # Extract results
+  res_cal_int <- summary(fit_cal_int)$mean
+  res_cal_slope <- summary(fit_cal_slope)$mean["cll_pred", ]
 
-  CI <- round(confint(cal_model), 5)
-
+  # Return estimates with CIs
   return(tibble(
-    cal_int = cal_model$coefficients[1],
-    cal_int_lower = CI[1, 1],
-    cal_int_upper = CI[1, 2],
-    cal_slope = cal_model$coefficients[2],
-    cal_slope_lower = CI[2, 1],
-    cal_slope_upper = CI[2, 2]
+    cal_int = res_cal_int$estimate,
+    cal_int_lower = res_cal_int$estimate - qnorm(0.975) * res_cal_int$san.se,
+    cal_int_upper = res_cal_int$estimate + qnorm(0.975) * res_cal_int$san.se,
+    cal_slope = 1 + res_cal_slope$estimate,
+    cal_slope_lower = 1 +
+      (res_cal_slope$estimate - qnorm(0.975) * res_cal_slope$san.se),
+    cal_slope_upper = 1 +
+      (res_cal_slope$estimate + qnorm(0.975) * res_cal_slope$san.se),
   ))
 }
 
