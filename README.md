@@ -1,4 +1,4 @@
-# KFRE Performance with EKFC vs CKD-EPI eGFR Equations
+# Predictive Performance and Clinical Utility of the Kidney Failure Risk Equation Using EKFC Versus CKD-EPI Estimated GFR
 
 [![License: CC BY 4.0](https://img.shields.io/badge/License-CC_BY_4.0-lightgrey.svg)](https://creativecommons.org/licenses/by/4.0/)
 
@@ -8,7 +8,7 @@ This work was co-first authored by [**Antoine Créon**](https://github.com/Antoi
 
 ## Overview
 
-This repository contains the analysis code for the study *"Performance and clinical utility of the Kidney Failure Risk Equation when using European Kidney Function Consortium"*, published in *[JOURNAL NAME]* in *[PUBLICATION DATE]*.
+This repository contains the analysis code for the study *"Predictive Performance and Clinical Utility of the Kidney Failure Risk Equation Using EKFC Versus CKD-EPI Estimated GFR"*, published in *[JOURNAL NAME]* in *[PUBLICATION DATE]*.
 
 *[LINK TO THE PUBLISHED MANUSCRIPT]*
 
