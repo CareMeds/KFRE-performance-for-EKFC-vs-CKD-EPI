@@ -1,4 +1,4 @@
-# Predictive Performance and Clinical Utility of the Kidney Failure Risk Equation Using EKFC Versus CKD-EPI Estimated GFR
+# Similar Predictive Performance and Clinical Utility of the Kidney Failure Risk Equation Using EKFC Or CKD-EPI Estimated Glomerular Filtration Rate
 
 [![License: CC BY 4.0](https://img.shields.io/badge/License-CC_BY_4.0-lightgrey.svg)](https://creativecommons.org/licenses/by/4.0/)
 
@@ -8,7 +8,7 @@ This work was co-first authored by [**Antoine Créon**](https://github.com/Antoi
 
 ## Overview
 
-This repository contains the analysis code for the study *"Predictive Performance and Clinical Utility of the Kidney Failure Risk Equation Using EKFC Versus CKD-EPI Estimated GFR"*, published in *[JOURNAL NAME]* in *[PUBLICATION DATE]*.
+This repository contains the analysis code for the study *"Similar Predictive Performance and Clinical Utility of the Kidney Failure Risk Equation Using EKFC Or CKD-EPI Estimated Glomerular Filtration Rate"*, published in *[JOURNAL NAME]* in *[PUBLICATION DATE]*.
 
 *[LINK TO THE PUBLISHED MANUSCRIPT]*
 
@@ -21,6 +21,8 @@ This repository contains the analysis code for the study *"Predictive Performanc
 │   ├── 3. Outcome derivation.R      # Define kidney failure and death outcomes
 │   ├── 4. Predictions.R             # Calculate KFRE predictions using different eGFR equations
 │   ├── 5. Validation.R              # Model validation (discrimination, calibration, Brier scores)
+│   ├── 6.1 Sensitivity analysis - restricted to two eGFRs.R              # Sensitivity analysis
+│   ├── 6.2 Sensitivity analysis - subgroups.R              # Sensitivity analysis
 │   ├── Functions eGFR equations.R   # eGFR calculation functions (CKD-EPI, EKFC)
 │   ├── Functions for analyses.R     # Helper functions for statistical analyses
 └── README.md
@@ -49,19 +51,10 @@ This repository contains the analysis code for the study *"Predictive Performanc
 | scales | 1.4.0 | Axis scaling |
 
 
-## Usage
-
-Scripts are numbered to indicate execution order:
-
-1. Run scripts `0.` through `3.` to prepare the analysis dataset
-2. Run script `4.` to generate KFRE predictions
-3. Run script `5.` to perform model validation
-
-**Note:** Raw data from the SCREAM cohort are not publicly available due to privacy regulations. The code is provided for transparency purposes.
-
 ## Data Availability
 
-This study uses data from the Stockholm CREAtinine Measurement (SCREAM) cohort. Due to Swedish and European privacy regulations, individual-level data cannot be shared publicly. Researchers interested in accessing SCREAM data should contact the study principal investigators.
+This study uses data from the Stockholm CREAtinine Measurement (SCREAM) cohort. Due to Swedish and European privacy regulations, individual-level data cannot be shared publicly. The code is provided for transparency purposes. Researchers interested in accessing SCREAM data should contact the Steering Committee of the SCREAM project (juan.jesus.carrero@ki.se).
+
 
 ## License
 
@@ -72,7 +65,3 @@ This work is licensed under a [Creative Commons Attribution 4.0 International Li
 If you use this code, please cite:
 
 > XXX (ADD CITATION ONCE PUBLISHED)
-
-## Acknowledgments
-
-This study was conducted using data from the Stockholm CREAtinine Measurement (SCREAM) project.
