@@ -1,6 +1,6 @@
 ################################################################################
 # FILENAME: Functions for analyses.R
-# PROJECT: KFRE Performance with non-CKD-EPI equations
+# PROJECT: Performance and Clinical Utility of the KFRE Using EKFC Versus CKD-EPI eGFR
 # PURPOSE: Compute estimated glomerular filtration rate
 # AUTHOR: Malou Magnani
 # CREATED: 2025-02

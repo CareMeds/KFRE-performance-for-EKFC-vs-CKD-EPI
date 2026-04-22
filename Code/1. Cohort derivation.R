@@ -1,6 +1,6 @@
 ################################################################################
 # FILENAME: 0. Data extraction.R
-# PROJECT: KFRE Performance with non-CKD-EPI equations
+# PROJECT: Performance and Clinical Utility of the KFRE Using EKFC Versus CKD-EPI eGFR
 # PURPOSE: Create a flow chart of inclusion and exclusion
 # AUTHOR: Malou Magnani
 # CREATED: 2025-02-01
@@ -199,56 +199,6 @@ cc_rrt <- alb_cys_creat_18_egfr |>
 removed_krt <- alb_cys_creat_18_egfr |>
   dplyr::filter(!(lopnr %in% cc_rrt$lopnr))
 
-################################################################################
-# Final flow chart #############################################################
-################################################################################
-cat(
-  "Initial number of individuals included:",
-  length(unique(cystatinc_2011$lopnr)),
-  "\n",
-  "Corresponding number of measurements:",
-  length(cystatinc_2011$lopnr),
-  "\n",
-  "Patient exclusions due to registration anomalies:",
-  length(unique(removed_death$lopnr)),
-  "\n",
-  "Corresponding number of measurements:",
-  length(removed_death$lopnr),
-  "\n",
-  "Patient exclusions due to criteria of having measured creatinine and Cystatin C on the same day:",
-  length(unique(removed_creat$lopnr)),
-  "\n",
-  "Corresponding number of measurements:",
-  length(removed_creat$lopnr),
-  "\n",
-  "Patient exclusions due to albuminuria measurement longer than 12 months:",
-  length(unique(removed_alb$lopnr)),
-  "\n",
-  "Corresponding number of measurements:",
-  length(removed_alb$lopnr),
-  "\n",
-  "Exclude patients under 18 years old:",
-  length(unique(removed_18$lopnr)),
-  "\n",
-  "Corresponding number of measurements:",
-  length(removed_18$lopnr),
-  "\n",
-  "Exclude patients with eGFR < 10 and EGFR >= 60:",
-  length(unique(removed_egfr$lopnr)),
-  "\n",
-  "Corresponding number of measurements:",
-  length(removed_egfr$lopnr),
-  "\n",
-  "Exclude patients with RRT before baseline:",
-  length(unique(removed_krt$lopnr)),
-  "\n",
-  "Corresponding measurements:",
-  length(removed_krt$lopnr),
-  "\n",
-  "Final number of inclusions:",
-  length(unique(cc_rrt$lopnr)),
-  "\n"
-)
 
 ################################################################################
 # Mean Albuminuria #############################################################

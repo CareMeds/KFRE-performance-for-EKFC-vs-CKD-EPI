@@ -1,6 +1,6 @@
 ################################################################################
 # FILENAME: 2. Covariate derivation.R
-# PROJECT: KFRE Performance with non-CKD-EPI equations
+# PROJECT: Performance and Clinical Utility of the KFRE Using EKFC Versus CKD-EPI eGFR
 # PURPOSE: Derive covariates
 # AUTHOR: Malou Magnani
 # CREATED: 2025-02-01
@@ -100,6 +100,7 @@ cohort <- cohort_egfr |>
     rrt_date,
     death_date,
     date_emigration,
+    date_creat,
     all_of(egfrs)
   )
 
