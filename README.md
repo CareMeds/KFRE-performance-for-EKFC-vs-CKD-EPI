@@ -2,15 +2,17 @@
 
 [![License: CC BY 4.0](https://img.shields.io/badge/License-CC_BY_4.0-lightgrey.svg)](https://creativecommons.org/licenses/by/4.0/)
 
-## Authors
-
-This work was co-first authored by [**Antoine Créon**](https://github.com/Antoine-Creon) and **Malou Magnani**, and supervised by [**Edouard Fu**](https://edouard-fu.github.io/) (Leiden University Medical Center) in collaboration with the [Cardio-Renal Epidemiology group](https://ki.se/en/research/research-areas-centres-and-networks/research-groups/cardio-renal-epidemiology-juan-jesus-carreros-research-group) of **Juan Jesus Carrero** at Karolinska Institutet.
-
 ## Overview
 
 This repository contains the analysis code for the study *"Similar Predictive Performance and Clinical Utility of the Kidney Failure Risk Equation Using EKFC Or CKD-EPI Estimated Glomerular Filtration Rate"*, published in *[JOURNAL NAME]* in *[PUBLICATION DATE]*.
 
 *[LINK TO THE PUBLISHED MANUSCRIPT]*
+
+The work was also presented as an oral communication at the **European Renal Association 2026 Congress** (ERA26-RES-1377), where it received the *Best Abstract Presented by Young Authors* award in the Chronic Kidney Disease category.
+
+## Authors
+
+This study was co-first authored by [**Antoine Créon**](https://github.com/Antoine-Creon) and **Malou Magnani**, and supervised by [**Edouard Fu**](https://edouard-fu.github.io/) (Leiden University Medical Center) in collaboration with the [Cardio-Renal Epidemiology group](https://ki.se/en/research/research-areas-centres-and-networks/research-groups/cardio-renal-epidemiology-juan-jesus-carreros-research-group) of **Juan Jesus Carrero** at Karolinska Institutet.
 
 ## Repository Structure
 
