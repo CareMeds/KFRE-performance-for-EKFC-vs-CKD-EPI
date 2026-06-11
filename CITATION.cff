@@ -41,3 +41,30 @@ keywords:
   - "prediction performance"
   - "clinical utility"
 license: 'https://creativecommons.org/licenses/by/4.0/'
+preferred-citation:
+  type: article
+  authors:
+  - family-names: "Créon"
+    given-names: "Antoine"
+    orcid: "https://orcid.org/0009-0006-6498-0257"
+  - family-names: "Magnani"
+    given-names: "Malou"
+  - family-names: "Maas"
+    given-names: "Carolien C H M"
+  - family-names: "Van Diepen"
+    given-names: "Merel"
+  - family-names: "Caldinelli"
+    given-names: "Aurora"
+  - family-names: "Russel"
+    given-names: "William A"
+  - family-names: "Dekker"
+    given-names: "Friedo W"
+  - family-names: "Carrero"
+    given-names: "Juan-Jesus"
+  - family-names: "Fu"
+    given-names: "Edouard L"
+  doi: "10.1093/ckj/sfag187"
+  journal: "Clinical Kidney Journal"
+  month: 6
+  title: "Similar Predictive Performance and Clinical Utility of the Kidney Failure Risk Equation Using EKFC or CKD-EPI Estimated Glomerular Filtration Rate"
+  year: 2026
